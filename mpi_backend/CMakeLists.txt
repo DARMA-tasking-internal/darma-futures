@@ -4,7 +4,10 @@ target_include_directories(darma PUBLIC
   $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/mpi_backend>
   $<INSTALL_INTERFACE:include>
 )
+find_package(DarmaSerialization)
+target_link_libraries(darma darma_serialization::darma_serialization)
 target_link_libraries(darma darma_frontend)
+
 
 install(TARGETS darma EXPORT darma DESTINATION lib)
 install(EXPORT darma DESTINATION cmake)
