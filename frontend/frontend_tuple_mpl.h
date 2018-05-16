@@ -2,6 +2,11 @@
 #define frontend_tuple_mpl_h
 
 #include "mpl.h"
+#include "async_ref.h"
+
+#include <type_traits>
+#include <tuple>
+#include <utility>
 
 template <int Idx, class T>
 struct increment_on_async_ref {
@@ -129,6 +134,60 @@ struct mod_return_type_selector<async_ref<T,Imm,Sched>> {
   using type_t=async_ref<T,None,Sched>; 
 };
 
+template <class T>
+struct is_async_ref_type {
+  constexpr static bool value = false;
+};
+
+template <class T, class I, class S>
+struct is_async_ref_type<async_ref<T, I, S>> {
+  constexpr static bool value = true;
+};
+
+template <class T>
+struct is_async_ref_type<async_ref_base<T>> {
+  constexpr static bool value = true;
+};
+
+namespace detail {
+
+template <class T, class Enable = void>
+struct set_async_ref_terminate_id {
+  void operator()(T&& object, int terminateID_) { /*do nothing*/ }
+};
+
+template <class T>
+struct set_async_ref_terminate_id<T, std::enable_if_t<is_async_ref_type<std::decay_t<T>>::value>> {
+  void operator()(T&& object, int terminateID_) { 
+    object.setTerminateID(terminateID_);
+  }
+};
+
+} // end namespace detail
+
+template <int Remainder, int Idx>
+struct tuple_set_async_refs_terminate_id {
+
+  template <class ArgsTupleDeduced>
+  void operator()(ArgsTupleDeduced&& args_tuple, int terminateID_) {
+
+    detail::set_async_ref_terminate_id<decltype(std::get<Idx>(args_tuple))>()(
+       std::forward<decltype(std::get<Idx>(args_tuple))>(std::get<Idx>(args_tuple)),
+       terminateID_
+    );
+ 
+    tuple_set_async_refs_terminate_id<Remainder-1, Idx+1>()(std::forward<ArgsTupleDeduced>(args_tuple), terminateID_); 
+  }
+
+};
+
+template <int Idx>
+struct tuple_set_async_refs_terminate_id<0, Idx, ArgsTupleDeduced> {
+
+  template <class ArgsTupleDeduced>
+  void operator()(ArgsTupleDeduced&& args_tuple, int terminateID_) { /*terminate*/ }
+
+};
 
 #endif
 
