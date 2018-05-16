@@ -8,6 +8,7 @@
 #include "mpi_predicate.h"
 
 #include <darma/serialization/simple_handler.h>
+#include <darma/serialization/serializers/all.h>
 
 #include <mpi.h>
 #include <list>
