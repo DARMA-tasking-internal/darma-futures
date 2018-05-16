@@ -8,6 +8,7 @@
 #include "mpi_predicate.h"
 
 #include <darma/serialization/simple_handler.h>
+#include <darma/serialization/serializers/all.h>
 
 #include <mpi.h>
 #include <list>
@@ -56,12 +57,7 @@ struct MpiBackend {
     return new PredicateTask<PredicateOp,DependentOp,Context>(std::move(pred_op), std::move(dep_op));
   }
 
-  void register_dependency(task* t, mpi_async_ref& in){
-    for (int reqId : in.pendingRequests()){
-      t->increment_join_counter();
-      listeners_[reqId] = t;
-    }
-  }
+  void register_dependency(task* t, mpi_async_ref& in);
 
   bool run_root() const {
     return true;
@@ -145,7 +141,7 @@ struct MpiBackend {
       // use static methods for everything).
       auto buffer = make_packed_buffer<Accessor>(
         non_local_handler_t{},
-        std::move(ref), std::forward<Index>(idx)
+        ref, std::forward<Index>(idx)
       );
       // buffer owns the packed data.
       // buffer.data() is a `char*` pointing to the beginning of the packed data
@@ -153,7 +149,7 @@ struct MpiBackend {
     }
     else {
       auto buffer = make_packed_buffer<Accessor>(
-        local_handler_t{}, std::move(ref), std::forward<Index>(idx)
+        local_handler_t{}, ref, std::forward<Index>(idx)
       );
       // buffer owns the packed data.
       // buffer.data() is a `char*` pointing to the beginning of the packed data
@@ -170,22 +166,22 @@ struct MpiBackend {
   template <class Accessor, class SerializationHandler,
             class T, class Index>
   auto make_packed_buffer(SerializationHandler&& handler,
-                          async_ref_base<T>&& ref,
+                          async_ref_base<T>& ref,
                           Index&& idx){
     auto s_ar = handler.make_sizing_archive();
     // TODO pass idx to the Accessor (if that's part of the concept?)
-    Accessor::compute_size(*ref, s_ar);
+    Accessor::compute_size(*ref, idx, s_ar);
     auto p_ar = handler.make_packing_archive(std::move(s_ar));
     // TODO forward idx to the Accessor (if that's part of the concept?)
-    Accessor::pack(*ref, p_ar);
+    Accessor::pack(*ref, idx, p_ar);
     return std::forward<SerializationHandler>(handler).extract_buffer(std::move(p_ar));
   }
 
 
   template <class Accessor, class Task, class T,
-            class Index, class... Args>
+            class Index>
   auto make_active_send_op(async_ref_base<T>&& ref, 
-                    Index&& idx, Args&&... args){
+                    Index&& idx){
     //size
     //allocate a send buffer
     //post the MPI request with a tag from att
@@ -195,14 +191,14 @@ struct MpiBackend {
     return op;
   };
 
-  template <class Accessor, class T, class Index, class... Args>
+  template <class Accessor, class T, class Index>
   auto make_recv_op(async_ref_base<T>&& ref,
-                    void* data, size_t size,
-                    Index&& idx, Args&&... args){
+                    Index&& idx){
 
+    size_t size; //get this from a probe/etc
+    void* data; //get this from a temp buffer
     //size
     //post the MPI request with a tag from att
-    RecvOp<T> op(std::move(ref));
 
     //MPI_Irecv(..., op.getArgument().allocateRequest());
     // TODO get is_local from somewhere
@@ -210,26 +206,28 @@ struct MpiBackend {
 
     // TODO get data and size from somewhere (or just pass them in?)
 
+    std::decay_t<Index> incoming;
+
     if(not is_local) {
       // See notes in make_send_op()
       unpack_object_from_buffer<Accessor>(
         non_local_handler_t{},
-        std::move(ref), data, size, std::forward<Index>(idx)
+        ref, data, size, incoming
       );
-    }
-    else {
+    } else {
       unpack_object_from_buffer<Accessor>(
         local_handler_t{},
-        std::move(ref), data, size, std::forward<Index>(idx)
+        ref, data, size, incoming
       );
     }
+    RecvOp<T> op(std::move(ref));
     return op;
   };
 
-  template <class SerializationHandler, class Accessor,
+  template <class Accessor, class SerializationHandler,
             class T, class Index>
   void unpack_object_from_buffer(SerializationHandler&& handler,
-                                 async_ref_base<T>&& ref,
+                                 async_ref_base<T>& ref,
                                  void* data, size_t size,
                                  Index&& idx){
     auto u_ar = handler.make_unpacking_archive(
@@ -243,7 +241,7 @@ struct MpiBackend {
     // alloc_t alloc = u_ar.template get_allocator_as<alloc_t>();
     // std::allocator_traits<alloc_t>::destroy(alloc, &*ref);
     // TODO forward idx to the Accessor (if that's part of the concept?)
-    Accessor::unpack(static_cast<void*>(&*ref), u_ar);
+    Accessor::unpack(*ref, u_ar);
   }
 
   template <class SendOp>
@@ -263,8 +261,6 @@ struct MpiBackend {
 
   template <class Phase, class GeneratorTask>
   void register_phase_collection(Phase& ph, GeneratorTask&& gen){
-    clear_tasks();
-    //ensure that all of these tasks 
     for (auto iter=ph->index_begin(); iter != ph->index_end(); ++iter){
       auto& local = *iter;
       auto* be_task = gen.generate(static_cast<Context*>(this),local.index);
@@ -273,6 +269,9 @@ struct MpiBackend {
       be_task->setCounters(&local.counters);
       taskQueue_.push_back(be_task);
     }
+    //flush all tasks created by this collection
+    //run "bulk-synchronously" for now
+    clear_tasks();
   }
 
   template <class Phase, class Terminator, class GeneratorTask>
@@ -289,10 +288,10 @@ struct MpiBackend {
     clear_tasks();
     auto identity = Functor::identity();
     //ensure that all of these tasks 
-    auto& coll = collIn;
+    auto& coll = *collIn;
     for (auto iter=ph->index_begin(); iter != ph->index_end(); ++iter){
       auto& local = *iter;
-      Functor()(*coll->getElement(local.index), identity);
+      Functor()(*coll.getElement(local.index), identity);
     }
     MPI_Allreduce(MPI_IN_PLACE,
                   Functor::mpiBuffer(identity), 

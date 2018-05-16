@@ -18,7 +18,27 @@ struct Patch {
 
 
 struct DarmaPatch {
-  struct GhostAccessor {};
+  struct GhostAccessor {
+    template <class Archive>
+    static void pack(Patch& p, int index, Archive& ar){
+      ar | index;
+      //pack a vector or something
+    }
+
+    template <class Archive>
+    static void unpack(Patch& p, Archive& ar){
+      int neighbor;
+      std::vector<double> values;
+      ar | neighbor;
+      //ar | values;
+      //loop incoming values from that neighbor and put them in correct location
+    }
+
+    template <class Archive>
+    static void compute_size(Patch& p, int index, Archive& ar){
+      pack(p,index,ar);
+    }
+  };
 
   struct Timestep {
     auto operator()(Context* ctx, async_ref_mm<Patch> patch){

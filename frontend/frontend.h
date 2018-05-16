@@ -19,24 +19,22 @@ struct Frontend : public Backend {
 
 
   template <class Accessor, class Index,
-            class T, class Imm, class Sched, class... Args>
-  auto send(Index&& idx, async_ref<T,Imm,Sched>&& input, Args&&... args){
+            class T, class Imm, class Sched>
+  auto send(Index&& idx, async_ref<T,Imm,Sched>&& input){
     using retType = typename DefaultSequencer::NewPermissions<ReadOnly,T,Imm,Sched>::type_t;
     retType ret;
-    auto op = Backend::template make_send_op<Accessor>(std::move(input), std::forward<Index>(idx),
-                                             std::forward<Args>(args)...);
+    auto op = Backend::template make_send_op<Accessor>(std::move(input), std::forward<Index>(idx));
     Backend::sequence(op, op.getArgument(), ret);
     Backend::register_send_op(std::move(op));
     return ret;
   }
 
   template <class Accessor, class Index,
-            class T, class Imm, class Sched, class... Args>
-  auto recv(Index&& idx, async_ref<T,Imm,Sched>&& input, Args&&... args){
+            class T, class Imm, class Sched>
+  auto recv(Index&& idx, async_ref<T,Imm,Sched>&& input){
     using retType = typename DefaultSequencer::NewPermissions<None,T,Imm,Sched>::type_t;
     retType ret;
-    auto op = Backend::template make_recv_op<Accessor>(std::move(input), std::forward<Index>(idx),
-                                             std::forward<Args>(args)...);
+    auto op = Backend::template make_recv_op<Accessor>(std::move(input), std::forward<Index>(idx));
     Backend::sequence(op, op.getArgument(), ret);
     Backend::register_recv_op(std::move(op));
     return ret;
