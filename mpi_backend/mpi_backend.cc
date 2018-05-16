@@ -1,6 +1,16 @@
 #include "mpi_backend.h"
 
 void
+MpiBackend::register_dependency(task* t, mpi_async_ref& in)
+{
+  for (int reqId : in.pendingRequests()){
+    t->increment_join_counter();
+    listeners_[reqId] = t;
+  }
+  in.clearRequests();
+}
+
+void
 MpiBackend::inform_listener(int idx)
 {
   task* listener = listeners_[idx];

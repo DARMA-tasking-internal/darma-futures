@@ -10,6 +10,10 @@ struct mpi_async_ref {
     return requests_;
   }
 
+  void clearRequests() {
+    requests_.clear();
+  }
+
  private:
   std::vector<int> requests_;
 };
