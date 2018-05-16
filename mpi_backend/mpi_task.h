@@ -5,7 +5,7 @@
 
 template <class Context>
 struct TaskBase {
-  TaskBase() : join_counter_(0) {}
+  TaskBase() : join_counter_(0), counters_(nullptr) {}
 
   void increment_join_counter(){ ++join_counter_; }
 
@@ -17,7 +17,16 @@ struct TaskBase {
 
   virtual void run(Context* ctx) = 0;
 
+  bool hasCounters() const {
+    return counters_;
+  }
+
+  void setCounters(PerformanceCounter* ctr){
+    ctr = counters_;
+  }
+
  private:
+  PerformanceCounter* counters_;
   int join_counter_;
 };
 

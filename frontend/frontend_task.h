@@ -68,7 +68,7 @@ struct GeneratorForwarder {
 template <class T, class Idx>
 struct GeneratorForwarder<async_ref_base<collection<T,Idx>>> {
   template <class Context>
-  auto operator()(Context* ctx, Idx& idx, async_ref_base<collection<T,Idx>>& coll){
+  auto operator()(Context* ctx, const Idx& idx, async_ref_base<collection<T,Idx>>& coll){
     auto ret = ctx->getElement(idx,coll);
     return ret;
   }

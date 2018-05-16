@@ -265,10 +265,12 @@ struct MpiBackend {
   void register_phase_collection(Phase& ph, GeneratorTask&& gen){
     clear_tasks();
     //ensure that all of these tasks 
-    for (int idx : ph.indices()){
-      auto* be_task = gen.generate(static_cast<Context*>(this),idx);
+    for (auto iter=ph->index_begin(); iter != ph->index_end(); ++iter){
+      auto& local = *iter;
+      auto* be_task = gen.generate(static_cast<Context*>(this),local.index);
       //these rigorously cannot have any dependencies
       //frontend().register_dependencies(be_task);
+      be_task->setCounters(&local.counters);
       taskQueue_.push_back(be_task);
     }
   }
@@ -288,8 +290,9 @@ struct MpiBackend {
     auto identity = Functor::identity();
     //ensure that all of these tasks 
     auto& coll = collIn;
-    for (int idx : ph.indices()){
-      Functor()(*coll->getElement(idx), identity);
+    for (auto iter=ph->index_begin(); iter != ph->index_end(); ++iter){
+      auto& local = *iter;
+      Functor()(*coll->getElement(local.index), identity);
     }
     MPI_Allreduce(MPI_IN_PLACE,
                   Functor::mpiBuffer(identity), 
@@ -301,22 +304,24 @@ struct MpiBackend {
   }
 
   template <class Index>
-  void local_init_phase(Phase<Index>& ph, std::vector<Index>& idx){
-    ph.local_ = idx;
-    make_rank_mapping(ph.size_, ph.index_to_rank_mapping_, idx);
+  void local_init_phase(Phase<Index>& ph, std::vector<Index>& indices){
+    for (auto& idx : indices){
+      ph->local_.emplace_back(idx);
+    }
+    make_rank_mapping(ph->size_, ph->index_to_rank_mapping_, indices);
   }
 
   template <class T, class Index>
   auto make_local_collection(Phase<Index>& p){
-    mpi_collection<T,Index> coll(p.size_);    
-    for (auto idx : p.local_){
-      coll.getCollection().setElement(idx, new T);
+    mpi_collection<T,Index> coll(p->size_);    
+    for (auto& local : p->local_){
+      coll.getCollection().setElement(local.index, new T);
     }
     return coll;
   }
 
   template <class Index, class T>
-  auto getElement(Index& idx, async_ref_base<collection<T,Index>>& coll){
+  auto getElement(const Index& idx, async_ref_base<collection<T,Index>>& coll){
     return async_ref_base<T>(coll->getElement(idx));
   }
 

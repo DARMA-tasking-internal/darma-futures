@@ -2,6 +2,7 @@
 #define mpi_async_ref_h
 
 #include <vector>
+#include "mpi_phase.h"
 
 struct mpi_async_ref {
 
