@@ -182,7 +182,7 @@ struct tuple_set_async_refs_terminate_id {
 };
 
 template <int Idx>
-struct tuple_set_async_refs_terminate_id<0, Idx, ArgsTupleDeduced> {
+struct tuple_set_async_refs_terminate_id<0, Idx> {
 
   template <class ArgsTupleDeduced>
   void operator()(ArgsTupleDeduced&& args_tuple, int terminateID_) { /*terminate*/ }
