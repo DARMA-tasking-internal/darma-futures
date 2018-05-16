@@ -291,7 +291,7 @@ struct MpiBackend {
     auto& coll = *collIn;
     for (auto iter=ph->index_begin(); iter != ph->index_end(); ++iter){
       auto& local = *iter;
-      Functor()(coll->getElement(local.index), identity);
+      Functor()(*coll.getElement(local.index), identity);
     }
     MPI_Allreduce(MPI_IN_PLACE,
                   Functor::mpiBuffer(identity), 
