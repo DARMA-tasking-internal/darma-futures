@@ -1,4 +1,34 @@
 #include "mpi_backend.h"
+#include <cstdlib>
+#include <iostream>
+
+void
+MpiBackend::create_pending_recvs()
+{
+  for (int i=0; i < numPendingProbes_; ++i){
+    MPI_Status stat;
+    MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, comm_, &stat);
+    auto& rankMap = pendingRecvs_[stat.MPI_SOURCE];
+    auto iter = rankMap.find(stat.MPI_TAG);
+    PendingRecvBase* recv = iter->second;
+    rankMap.erase(iter);
+
+    int size;
+    void* data = allocate_temp_buffer(size);
+    int reqId = allocate_request();
+    MPI_Irecv(data, size, MPI_BYTE, stat.MPI_SOURCE, stat.MPI_TAG, comm_, &requests_[reqId]);
+    listeners_[reqId] = recv;
+    recv->configure(size, data);
+  }
+}
+
+int
+MpiBackend::allocate_request()
+{
+  int ret = requests_.size();
+  requests_.emplace_back();
+  return ret;
+}
 
 void
 MpiBackend::register_dependency(task* t, mpi_async_ref& in)
@@ -13,9 +43,12 @@ MpiBackend::register_dependency(task* t, mpi_async_ref& in)
 void
 MpiBackend::inform_listener(int idx)
 {
-  task* listener = listeners_[idx];
+  Listener* listener = listeners_[idx];
   listeners_[idx] = nullptr;
-  listener->decrement_join_counter();
+  int cnt = listener->decrement_join_counter();
+  if (cnt == 0){
+    listener->finalize();
+  }
 }
 
 void
@@ -58,15 +91,29 @@ MpiBackend::progress_engine()
   progress_tasks();
 }
 
+void*
+MpiBackend::allocate_temp_buffer(int size)
+{
+  return new char[size];
+}
+
 void
 MpiBackend::clear_dependencies()
 {
+  create_pending_recvs();
   MPI_Waitall(requests_.size(), requests_.data(), MPI_STATUSES_IGNORE);
   for (int i=0; i < requests_.size(); ++i){
     inform_listener(i);
   }
   requests_.clear();
   listeners_.clear();
+}
+
+void
+MpiBackend::error(const std::string& error)
+{
+  std::cerr << error << std::endl;
+  abort();
 }
 
 void
@@ -79,7 +126,8 @@ MpiBackend::clear_tasks()
 }
 
 void
-MpiBackend::make_rank_mapping(int total_size, std::vector<int>& mapping, const std::vector<int>& local){
+MpiBackend::make_rank_mapping(int total_size, std::vector<int>& mapping, const std::vector<int>& local)
+{
   //do a prefix sum or something
 }
 

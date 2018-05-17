@@ -41,12 +41,12 @@ struct DarmaPatch {
   };
 
   struct Timestep {
-    auto operator()(Context* ctx, async_ref_mm<Patch> patch){
+    auto operator()(Context* ctx, int index, async_ref_mm<Patch> patch){
       patch->timestep();
       auto patch_rm = patch.read();
-      for (auto& bnd : patch->boundaries()){
-        patch_rm = ctx->send<GhostAccessor>(bnd,std::move(patch_rm));
-        patch_rm = ctx->recv<GhostAccessor>(bnd,std::move(patch_rm));
+      for (int bnd : patch->boundaries()){
+        patch_rm = ctx->send<GhostAccessor>(index,bnd,std::move(patch_rm));
+        patch_rm = ctx->recv<GhostAccessor>(index,bnd,std::move(patch_rm));
       }
       
       async_ref_mm<Patch> ugh(patch);
