@@ -97,16 +97,18 @@ struct CollectiveMove {
                   async_collection<Swarm,int> swarm, 
                   async_collection<int,int> nmoved){
 
-    auto swarm_ret = swarm.modify(); 
-    auto nmoved_ret = nmoved.modify();
+    auto swarm_ret = ctx->modify(std::move(swarm));
+    auto nmoved_ret = ctx->modify(std::move(nmoved));
     //std::tie(swarm_ret, nmoved_ret) = ctx->create_phase_work<DarmaSwarm::Move>(
     //          ph,std::move(swarm),std::move(nmoved));
 
-    async_ref_nm<int> total_ret;
+    auto total_ret = ctx->make_async_ref<int>();
     std::tie(total_ret, nmoved_ret) = ctx->phase_reduce<Add<int>>(ph, std::move(nmoved_ret));
 
-    decltype(ctx->predicate<GreaterThanZero>(total_ret)) terminate;  
-    std::tie(terminate, total_ret) = ctx->make_predicate<GreaterThanZero>(std::move(total_ret));
+    //this will be so much cleaner in c++17
+    auto tupleRet = ctx->make_predicate<GreaterThanZero>(std::move(total_ret));
+    auto terminate = std::move(std::get<0>(tupleRet));
+    std::tie(total_ret) = std::move(std::get<1>(tupleRet));
 
     //std::tie(swarm_ret,nmoved_ret) = 
     //  ctx->create_work_if<CollectiveMove>(std::move(terminate), ph,
@@ -130,12 +132,6 @@ int main(int argc, char** argv)
 
   auto nmoved_coll = dc->make_collection<int>(darma_size);
 
-  std::vector<int> local_indices(od_factor);
-  for (int i=0; i < od_factor; ++i){
-    local_indices[i] = rank*od_factor + i;
-  }
-
-  dc->local_init_phase(phase, local_indices);
   //this object IS valid to be accessed now
   auto mpi_swarm = dc->make_local_collection<Swarm>(phase);
   //need an mpi init function here

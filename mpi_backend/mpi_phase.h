@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <cstdint>
+#include "mpi_index_entry.h"
 
 struct PerformanceCounter {
   std::vector<uint64_t> counters;
@@ -35,7 +36,7 @@ struct PhaseData {
 
  private:
   int size_;
-  std::vector<int> index_to_rank_mapping_;
+  std::vector<IndexInfo> index_to_rank_mapping_;
   std::vector<LocalIndex> local_;
 };
 

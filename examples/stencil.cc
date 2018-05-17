@@ -1,11 +1,16 @@
 #include "mpi_backend.h"
 #include <vector>
+#include <iostream>
 
 using Context=Frontend<MpiBackend>;
 
 struct Patch {
  public:
-  void timestep(){}
+  void timestep(int index, int iter){
+    std::cout << "Running timestep "
+              << iter << " on index " << index
+              << std::endl;
+  }
 
   const std::vector<int>& boundaries() const {
     return boundaries_;
@@ -41,17 +46,14 @@ struct DarmaPatch {
   };
 
   struct Timestep {
-    auto operator()(Context* ctx, int index, async_ref_mm<Patch> patch){
-      patch->timestep();
-      auto patch_rm = patch.read();
-      for (int bnd : patch->boundaries()){
+    auto operator()(Context* ctx, int index, int iter, async_ref_mm<Patch> patch){
+      patch->timestep(index, iter);
+      auto patch_rm = ctx->read(std::move(patch));
+      for (int bnd : patch_rm->boundaries()){
         patch_rm = ctx->send<GhostAccessor>(index,bnd,std::move(patch_rm));
         patch_rm = ctx->recv<GhostAccessor>(index,bnd,std::move(patch_rm));
       }
-      
-      async_ref_mm<Patch> ugh(patch);
-
-      return std::make_tuple(patch_rm);
+      return std::make_tuple(std::move(patch_rm));
     }
   };
 
@@ -73,7 +75,7 @@ int main(int argc, char** argv)
   if (dc->run_root()){
     int niter = 10;
     for (int i=0; i < niter; ++i){
-      std::tie(coll) = dc->create_phase_work<DarmaPatch::Timestep>(phase,coll);
+      std::tie(coll) = dc->create_phase_work<DarmaPatch::Timestep>(phase,i,std::move(coll));
       if (i % 5 == 0) dc->balance(phase);
     }
   } else {

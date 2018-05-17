@@ -2,6 +2,15 @@
 #include <cstdlib>
 #include <iostream>
 
+MpiBackend::MpiBackend(MPI_Comm comm) :
+  comm_(comm),
+  collIdCtr_(0),
+  numPendingProbes_(0)
+{
+  MPI_Comm_rank(comm, &rank_);
+  MPI_Comm_size(comm, &size_);
+}
+
 void
 MpiBackend::create_pending_recvs()
 {
@@ -18,8 +27,9 @@ MpiBackend::create_pending_recvs()
     int reqId = allocate_request();
     MPI_Irecv(data, size, MPI_BYTE, stat.MPI_SOURCE, stat.MPI_TAG, comm_, &requests_[reqId]);
     listeners_[reqId] = recv;
-    recv->configure(size, data);
+    recv->configure(this, size, data);
   }
+  numPendingProbes_ = 0;
 }
 
 int
@@ -47,7 +57,8 @@ MpiBackend::inform_listener(int idx)
   listeners_[idx] = nullptr;
   int cnt = listener->decrement_join_counter();
   if (cnt == 0){
-    listener->finalize();
+    bool del = listener->finalize();
+    if (del) delete listener;
   }
 }
 
@@ -98,6 +109,13 @@ MpiBackend::allocate_temp_buffer(int size)
 }
 
 void
+MpiBackend::free_temp_buffer(void* buf, int size)
+{
+  char* cbuf = (char*) buf;
+  delete [] cbuf;
+}
+
+void
 MpiBackend::clear_dependencies()
 {
   create_pending_recvs();
@@ -126,8 +144,26 @@ MpiBackend::clear_tasks()
 }
 
 void
-MpiBackend::make_rank_mapping(int total_size, std::vector<int>& mapping, const std::vector<int>& local)
+MpiBackend::make_rank_mapping(int nEntriesGlobal, std::vector<IndexInfo>& mapping, std::vector<int>& local)
 {
-  //do a prefix sum or something
+  if (nEntriesGlobal % size_){
+    error("do not yet support collections that do not evenly divide ranks");
+  }
+  //do a prefix sum or something in future versions
+  int entriesPer = nEntriesGlobal;
+  mapping.resize(nEntriesGlobal);
+  for (int i=0; i < nEntriesGlobal; ++i){
+    int rank = i / entriesPer;
+    mapping[i].rank = rank;
+    mapping[i].rankUniqueId = i % entriesPer;
+    if (rank == rank_){
+      local.push_back(i);
+    }
+  }
 }
 
+void
+PendingRecvBase::clear()
+{
+  be_->free_temp_buffer(data_, size_);
+}

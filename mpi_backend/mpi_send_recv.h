@@ -5,7 +5,7 @@
 
 template <class T>
 struct SendOp {
-  SendOp(async_ref_base<T>&& ref) : toSend_(ref){}
+  SendOp(async_ref_base<T>&& ref) : toSend_(std::move(ref)){}
 
   async_ref_base<T>& getArgument(){
     return toSend_;
@@ -16,7 +16,7 @@ struct SendOp {
 
 template <class T>
 struct RecvOp {
-  RecvOp(async_ref_base<T>&& ref) : toRecv_(ref){}
+  RecvOp(async_ref_base<T>&& ref) : toRecv_(std::move(ref)){}
 
   async_ref_base<T>& getArgument(){
     return toRecv_;
