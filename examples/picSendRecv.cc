@@ -4,11 +4,45 @@ using Context=Frontend<MpiBackend>;
 
 struct Swarm {
  public:
+  Swarm() : remaining_(0){}
+
+  void init(int x, int y, int nx, int ny){
+    myX_ = x;
+    myY_ = y;
+    myIndex_ = linearize(x,y);
+    sizeX_ = nx;
+    sizeY_ = ny;
+
+    boundaries_.resize(4);
+    boundaries_[0] = linearize(nbrX(1),myY_);
+    boundaries_[1] = linearize(nbrX(-1),myY_);
+    boundaries_[2] = linearize(myX_,nbrY(1));
+    boundaries_[3] = linearize(myX_,nbrY(-1));
+  }
+
+  int nbrX(int disp){
+    return (myX_ + disp - sizeX_) % sizeX_;
+  }
+
+  int nbrY(int disp){
+    return (myY_ + disp - sizeY_) % sizeY_;
+  }
+
+  int linearize(int x, int y){
+    return y*sizeX_ + x;
+  }
+
   /**
     @return The number moved outside patch
   */
+  int initialMove(){
+    remaining_ = 3;
+    return remaining_;
+  }
+
   int move(){
-    return 0;
+    if (remaining_ > 0) --remaining_;
+    return remaining_;
   }
 
   void solveFields(){}
@@ -18,29 +52,35 @@ struct Swarm {
   }
 
  private:
+  int remaining_;
+  int sizeX_;
+  int sizeY_;
+  int myX_;
+  int myY_;
+  int myIndex_;
   std::vector<int> boundaries_;
 };
 
 struct DarmaSwarm {
  struct MigrateAccessor {
     template <class Archive>
-    static void pack(Swarm& p, int index, Archive& ar){
-      ar | index;
-      //pack a vector or something
+    static void pack(Swarm& p, int local, int remote, Archive& ar){
+      ar | local;
+      ar | remote;
     }
 
     template <class Archive>
     static void unpack(Swarm& p, Archive& ar){
-      int neighbor;
+      int remote;
+      int local;
       std::vector<double> values;
-      ar | neighbor;
-      //ar | values;
-      //loop incoming values from that neighbor and put them in correct location
+      ar | remote;
+      ar | local;
     }
 
     template <class Archive>
-    static void compute_size(Swarm& p, int index, Archive& ar){
-      pack(p,index,ar);
+    static void compute_size(Swarm& p, int local, int remote, Archive& ar){
+      pack(p,local,remote,ar);
     }
  };
 
@@ -48,14 +88,21 @@ struct DarmaSwarm {
  struct MpiOut {};
 
  struct Move {
-  auto operator()(Context* ctx, int index, async_ref_mm<Swarm> swarm, async_ref_mm<int> nmoved){
-    *nmoved = swarm->move();
-    auto swarm_nm = ctx->modify(std::move(swarm));
+  auto operator()(Context* ctx, int index, int iter,
+                  async_ref_mm<Swarm> swarm, async_ref_mm<int> nmoved){
+
+    if (iter == 0) *nmoved = swarm->initialMove();
+    else *nmoved = swarm->move();
+
+    auto swarm_sent = ctx->to_recv(std::move(swarm));
     for (auto& bnd : swarm->boundaries()){
-      swarm_nm = ctx->send<MigrateAccessor>(index,bnd,std::move(swarm_nm));
-      swarm_nm = ctx->recv<MigrateAccessor>(index,bnd,std::move(swarm_nm));
+      swarm_sent = ctx->send<MigrateAccessor>(index,bnd,std::move(swarm_sent));
     }
-    return std::make_tuple(std::move(swarm_nm),std::move(nmoved));
+    auto swarm_recvd = ctx->to_send(std::move(swarm_sent));
+    for (auto& bnd : swarm->boundaries()){
+      swarm_recvd = ctx->recv<MigrateAccessor>(index,bnd,std::move(swarm_recvd));
+    }
+    return std::make_tuple(std::move(swarm_recvd),std::move(nmoved));
   }
  };
 
@@ -94,23 +141,34 @@ struct Add {
 
 struct CollectiveMove {
   auto operator()(Context* ctx, Phase<int> ph, 
+                  int iter, int microIter,
                   async_collection<Swarm,int> swarm, 
                   async_collection<int,int> nmoved){
 
-    auto swarm_ret = swarm.modify(); 
-    auto nmoved_ret = nmoved.modify();
-    //std::tie(swarm_ret, nmoved_ret) = ctx->create_phase_work<DarmaSwarm::Move>(
-    //          ph,std::move(swarm),std::move(nmoved));
+    if (ctx->is_root()){
+      if (microIter == 0){
+        std::cout << "Starting iteration " << iter << std::endl;
+      }
+      std::cout << " ...running micro-iteration " << iter << std::endl;
+    }
 
-    async_ref_nm<int> total_ret;
+    auto swarm_ret = ctx->modify(std::move(swarm));
+    auto nmoved_ret = ctx->modify(std::move(nmoved));
+    std::tie(swarm_ret, nmoved_ret) = ctx->create_phase_work<DarmaSwarm::Move>(
+              ph,microIter,std::move(swarm),std::move(nmoved));
+
+    auto total_ret = ctx->make_async_ref<int>();
     std::tie(total_ret, nmoved_ret) = ctx->phase_reduce<Add<int>>(ph, std::move(nmoved_ret));
 
-    decltype(ctx->predicate<GreaterThanZero>(total_ret)) terminate;  
-    std::tie(terminate, total_ret) = ctx->make_predicate<GreaterThanZero>(std::move(total_ret));
+    //this will be so much cleaner in c++17
+    auto tupleRet = ctx->make_predicate<GreaterThanZero>(std::move(total_ret));
+    auto terminate = std::move(std::get<0>(tupleRet));
+    std::tie(total_ret) = std::move(std::get<1>(tupleRet));
 
-    //std::tie(swarm_ret,nmoved_ret) = 
-    //  ctx->create_work_if<CollectiveMove>(std::move(terminate), ph,
-    //     std::move(swarm_ret), std::move(nmoved_ret));
+    std::tie(swarm_ret,nmoved_ret) =
+      ctx->create_work_if<CollectiveMove>(std::move(terminate), ph,
+         iter, microIter+1,
+         std::move(swarm_ret), std::move(nmoved_ret));
     return std::make_tuple(std::move(swarm_ret), std::move(nmoved_ret));
   }
 };
@@ -130,12 +188,6 @@ int main(int argc, char** argv)
 
   auto nmoved_coll = dc->make_collection<int>(darma_size);
 
-  std::vector<int> local_indices(od_factor);
-  for (int i=0; i < od_factor; ++i){
-    local_indices[i] = rank*od_factor + i;
-  }
-
-  dc->local_init_phase(phase, local_indices);
   //this object IS valid to be accessed now
   auto mpi_swarm = dc->make_local_collection<Swarm>(phase);
   //need an mpi init function here
@@ -152,7 +204,7 @@ int main(int argc, char** argv)
     auto part_coll = dc->darma_collection(mpi_swarm);
     std::tie(part_coll) = dc->to_mpi<DarmaSwarm::MpiIn>(std::move(mpi_swarm));
     std::tie(part_coll,nmoved_coll) = 
-      dc->create_work<CollectiveMove>(phase,std::move(part_coll),std::move(nmoved_coll));
+      dc->create_work<CollectiveMove>(phase,i,0,std::move(part_coll),std::move(nmoved_coll));
     std::tie(mpi_swarm) = dc->from_mpi<DarmaSwarm::MpiOut>(std::move(part_coll));
 
     //un-overdecompose

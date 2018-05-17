@@ -25,9 +25,13 @@ struct MpiBackend {
   using Context=Frontend<MpiBackend>;
   using task=TaskBase<Context>;
 
-  MpiBackend(MPI_Comm comm) : comm_(comm) {}
+  static constexpr uintptr_t REQUEST_CLEAR = 0x1;
 
-  void error(const std::string& str);
+  MpiBackend(MPI_Comm comm);
+
+  void error(const char* fmt, ...);
+
+  void debug(const char* fmt, ...);
 
   Context& frontend() {
     return *static_cast<Context*>(this);
@@ -35,19 +39,21 @@ struct MpiBackend {
 
   template <class T, class... Args>
   auto make_async_ref(Args&&... args){
-    return async_ref<T,Modify,Modify>(std::forward<Args>(args)...);
+    return async_ref<T,Modify,Modify>::make(std::forward<Args>(args)...);
   }
 
   template <class T, class Idx>
   auto make_collection(Idx size){
-    async_ref<collection<T,Idx>,None,Modify> ret(size);
+    auto ret = async_ref<collection<T,Idx>,None,Modify>::make(size);
     ret->setId(collIdCtr_++);
     return ret;
   }
 
   template <class Idx>
   auto make_phase(Idx idx){
-    return Phase<Idx>(idx);
+    Phase<Idx> ret(idx);
+    local_init_phase(ret);
+    return ret;
   }
 
   template <class FrontendTask> 
@@ -68,6 +74,10 @@ struct MpiBackend {
 
   bool run_root() const {
     return true;
+  }
+
+  bool is_root() const {
+    return rank_ == 0;
   }
 
   void run_worker(){}
@@ -116,7 +126,7 @@ struct MpiBackend {
   template <class Accessor, class T, class Index>
   auto to_mpi(mpi_collection<T,Index>&& coll){
     //no load balancing yet, so this does nothing
-    return std::make_tuple(async_ref<collection<T,Index>,None,Modify>(std::move(coll.getCollection())));
+    return std::make_tuple(async_ref<collection<T,Index>,None,Modify>::make(coll.getCollection()));
   }
 
   template <class Accessor, class T, class Index>
@@ -134,36 +144,22 @@ struct MpiBackend {
   //      gets moved to a header file in DARMA serialization and organized into a handler
   using local_handler_t = darma::serialization::SimpleSerializationHandler<>;
 
-  struct TagMaker {
-    uint16_t collId;
-    uint16_t dstId;
-  };
+  int makeUniqueTag(int collId, int dstId, int srcId);
 
-  int makeUniqueTag(int collId, int dstId){
-    //this is dirty - but don't hate
-    TagMaker tag;  
-    tag.collId = collId;
-    tag.dstId = dstId;
-    return *reinterpret_cast<int*>(&tag);
-  }
-
-  template <class Accessor, class T, class LocalIndex, class RemoteIndex>
-  auto make_send_op(async_ref_base<T>&& ref, LocalIndex&& local, RemoteIndex&& remote){
+  template <class Accessor, class T, class LocalIndex, class RemoteIndex, class... Args>
+  auto make_send_op(async_ref_base<T>&& ref,
+                    LocalIndex&& local, RemoteIndex&& remote,
+                    Args&&... args){
     using index_t = std::decay_t<LocalIndex>;
     if (!ref.hasParent()){
       error("sending object with no parent collection");
     }
 
     auto* parent = ref.template getParent<index_t>();
-    auto& dst = parent->getEntryInfo(remote);
-    int dstRank = dst.rank;
-    int tag = makeUniqueTag(parent->id(), dst.rankUniqueId);
-
-    int request = allocate_request();
-    ref.addRequest(request);
+    auto& dst = parent->getIndexInfo(remote);
+    auto& src = parent->getIndexInfo(local);
 
     bool is_local = false; //push everything through MPI for now
-
     if(is_local) {
       //extra work needed here to put a local listener in the list
     } else {
@@ -172,12 +168,12 @@ struct MpiBackend {
       // (All SerializationHandlers that are currently implemented, though,
       // use static methods for everything).
       auto buffer = make_packed_buffer<Accessor>(
-        non_local_handler_t{},
-        ref, std::forward<RemoteIndex>(remote)
+        non_local_handler_t{}, ref,
+        std::forward<LocalIndex>(local),
+        std::forward<RemoteIndex>(remote),
+        std::forward<Args>(args)...
       );
-      MPI_Request* reqPtr = &requests_[request];
-      MPI_Isend(buffer.data(), buffer.capacity(), MPI_BYTE, dstRank, tag, 
-                comm_, reqPtr);
+      send_data(ref, parent->id(), src, dst, buffer.data(), buffer.capacity());
     }
 
     //size
@@ -185,18 +181,20 @@ struct MpiBackend {
     //post the MPI request with a tag from att
     SendOp<T> op(std::move(ref));
     return op;
-  };
+  }
 
   template <class Accessor, class SerializationHandler,
-            class T, class Index>
+            class T, class LocalIndex, class RemoteIndex, class... Args>
   auto make_packed_buffer(SerializationHandler&& handler,
-                          async_ref_base<T>& ref, Index&& idx){
+                          async_ref_base<T>& ref,
+                          LocalIndex&& local, RemoteIndex&& remote,
+                          Args&&... args){
     auto s_ar = handler.make_sizing_archive();
     // TODO pass idx to the Accessor (if that's part of the concept?)
-    Accessor::compute_size(*ref, idx, s_ar);
+    Accessor::compute_size(*ref, local, remote, s_ar, std::forward<Args>(args)...);
     auto p_ar = handler.make_packing_archive(std::move(s_ar));
     // TODO forward idx to the Accessor (if that's part of the concept?)
-    Accessor::pack(*ref, idx, p_ar);
+    Accessor::pack(*ref, local, remote, p_ar, std::forward<Args>(args)...);
     return std::forward<SerializationHandler>(handler).extract_buffer(std::move(p_ar));
   }
 
@@ -214,19 +212,20 @@ struct MpiBackend {
     return op;
   };
 
-  template <class Accessor, class T, class LocalIndex, class RemoteIndex>
-  auto make_recv_op(async_ref_base<T>&& ref, LocalIndex&& local, RemoteIndex&& remote){
+  template <class Accessor, class T, class LocalIndex, class RemoteIndex, class... Args>
+  auto make_recv_op(async_ref_base<T>&& ref, LocalIndex&& local, RemoteIndex&& remote, Args&&... args){
     using index_t = std::decay_t<LocalIndex>;
     auto* parent = ref.template getParent<index_t>();
-    auto& localEntry = parent->getEntryInfo(local);
-    auto& remoteEntry = parent->getEntryInfo(remote);
-    int tag = makeUniqueTag(parent->id(), localEntry.rankUniqueId);
-    auto* pending = new NonLocalPendingRecv<Accessor,T,index_t>;
+    auto& localEntry = parent->getIndexInfo(local);
+    auto& remoteEntry = parent->getIndexInfo(remote);
+
+    using MyRecv = NonLocalPendingRecv<Accessor,T,index_t,std::remove_reference_t<Args>...>;
+    auto* pending = new MyRecv(std::forward<Args>(args)...);
     pending->setObject(ref.get());
-    pendingRecvs_[remoteEntry.rank][tag] = pending;
+    add_pending_recv(pending, parent->id(), localEntry, remoteEntry);
     RecvOp<T> op(std::move(ref));
     return op;
-  };
+  }
 
   template <class SendOp>
   auto register_send_op(SendOp&& op){
@@ -286,14 +285,6 @@ struct MpiBackend {
     return async_ref_base<T>(std::move(identity));
   }
 
-  template <class Index>
-  void local_init_phase(Phase<Index>& ph, std::vector<Index>& indices){
-    for (auto& idx : indices){
-      ph->local_.emplace_back(idx);
-    }
-    make_rank_mapping(ph->size_, ph->index_to_rank_mapping_, indices);
-  }
-
   template <class T, class Index>
   auto make_local_collection(Phase<Index>& p){
     mpi_collection<T,Index> coll(p->size_);    
@@ -305,13 +296,34 @@ struct MpiBackend {
 
   template <class Index, class T>
   auto get_element(const Index& idx, async_ref_base<collection<T,Index>>& coll){
-    async_ref_base<T> ret(coll->getElement(idx));
-    ret.setParent(coll.get());
-    return ret;
+    T* t = coll->getElement(idx);
+    if (t){
+      async_ref_base<T> ret(coll->getElement(idx));
+      ret.setParent(coll.get());
+      return ret;
+    } else if (!coll->initialized()){
+      async_ref_base<T> ret = async_ref_base<T>::make();
+      coll->setElement(idx, ret.get());
+      ret.setParent(coll.get());
+      return ret;
+    } else {
+      error("do not yet support remote get_element from collections");
+      return async_ref_base<T>::make();
+    }
   }
 
   template <class Op, class T, class U>
   void sequence(Op&& op, T&& t, U&& u){}
+
+  template <class Op, class T, class Index>
+  void sequence(Op&& op,
+                async_ref_base<collection<T,Index>>& closure,
+                async_ref_base<collection<T,Index>>& continuation){
+    continuation->setInitialized();
+  }
+
+  void* allocate_temp_buffer(int size);
+  void free_temp_buffer(void* buf, int size);
 
  private:
   void inform_listener(int idx);
@@ -321,19 +333,33 @@ struct MpiBackend {
   void clear_dependencies();
   void clear_tasks();
   void clear_queues();
-  void* allocate_temp_buffer(int size);
-  void make_rank_mapping(int total_size, std::vector<int>& mapping, const std::vector<int>& local);
+  void make_rank_mapping(int total_size, std::vector<IndexInfo>& mapping, std::vector<int>& local);
   int allocate_request();
   void create_pending_recvs();
+  void add_pending_recv(PendingRecvBase* recv, int collId,
+                        const IndexInfo& local, const IndexInfo& remote);
+  void send_data(mpi_async_ref& in, int collId,
+                 const IndexInfo& src, const IndexInfo& dst,
+                 void* data, int size);
+
+  template <class Index>
+  void local_init_phase(Phase<Index>& ph){
+    std::vector<int> localIndices;
+    make_rank_mapping(ph->size_, ph->index_to_rank_mapping_, localIndices);
+    for (int idx : localIndices){
+      ph->local_.emplace_back(idx);
+    }
+  }
 
  private:
   std::vector<Listener*> listeners_;
   std::vector<int> indices_;
   std::vector<MPI_Request> requests_;
   std::list<task*> taskQueue_;
-  std::vector<std::map<int,PendingRecvBase*>> pendingRecvs_;
+  std::map<int,std::map<int,PendingRecvBase*>> pendingRecvs_;
   MPI_Comm comm_;
   int rank_;
+  int size_;
   int collIdCtr_;
   int numPendingProbes_;
 

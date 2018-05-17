@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <cstdint>
+#include "mpi_index_entry.h"
 
 struct PerformanceCounter {
   std::vector<uint64_t> counters;
@@ -33,9 +34,13 @@ struct PhaseData {
   return local_.end();
  }
 
+ const std::vector<IndexInfo>& mapping() const {
+   return index_to_rank_mapping_;
+ }
+
  private:
   int size_;
-  std::vector<int> index_to_rank_mapping_;
+  std::vector<IndexInfo> index_to_rank_mapping_;
   std::vector<LocalIndex> local_;
 };
 
@@ -50,6 +55,10 @@ struct Phase {
 
  bool active() const {
   return bool(data_);
+ }
+
+ const std::vector<IndexInfo>& mapping() const {
+   return data_->mapping();
  }
 
  PhaseData* operator->() const {

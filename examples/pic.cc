@@ -30,7 +30,7 @@ struct DarmaSwarm {
     for (auto& bnd : swarm->boundaries()){
       swarm = ctx->put_task<DarmaSwarm::Migrate,Move>(bnd,std::move(swarm));
     }
-    return std::make_tuple(swarm);
+    return std::make_tuple(std::move(swarm));
   }
  };
 };

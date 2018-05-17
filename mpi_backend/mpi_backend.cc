@@ -1,6 +1,43 @@
 #include "mpi_backend.h"
+#include "mpi_index_entry.h"
 #include <cstdlib>
 #include <iostream>
+
+MpiBackend::MpiBackend(MPI_Comm comm) :
+  comm_(comm),
+  collIdCtr_(0),
+  numPendingProbes_(0)
+{
+  MPI_Comm_rank(comm, &rank_);
+  MPI_Comm_size(comm, &size_);
+
+  requests_.reserve(1024);
+  indices_.resize(1024);
+}
+
+struct TagMaker {
+  unsigned int frontPadding : 1,
+    collId : 10,
+    dstId : 10,
+    srcId : 10,
+    backPadding : 1;
+};
+
+template <int T>
+struct print_size;
+
+int
+MpiBackend::makeUniqueTag(int collId, int dstId, int srcId){
+  //this is dirty - but don't hate
+  TagMaker tag;
+  tag.frontPadding = 0;
+  tag.collId = collId;
+  tag.dstId = dstId;
+  tag.srcId = srcId;
+  tag.backPadding = 0;
+  static_assert(sizeof(TagMaker) <= sizeof(int), "tag is small enough");
+  return *reinterpret_cast<int*>(&tag);
+}
 
 void
 MpiBackend::create_pending_recvs()
@@ -10,16 +47,34 @@ MpiBackend::create_pending_recvs()
     MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, comm_, &stat);
     auto& rankMap = pendingRecvs_[stat.MPI_SOURCE];
     auto iter = rankMap.find(stat.MPI_TAG);
+    if (iter == rankMap.end()){
+      error("unabled to find tag %d", stat.MPI_TAG);
+    }
     PendingRecvBase* recv = iter->second;
     rankMap.erase(iter);
 
-    int size;
+    int size; MPI_Get_count(&stat, MPI_BYTE, &size);
     void* data = allocate_temp_buffer(size);
-    int reqId = allocate_request();
-    MPI_Irecv(data, size, MPI_BYTE, stat.MPI_SOURCE, stat.MPI_TAG, comm_, &requests_[reqId]);
-    listeners_[reqId] = recv;
-    recv->configure(size, data);
+    int reqId = recv->id();
+    MPI_Irecv(data, size, MPI_BYTE, stat.MPI_SOURCE, stat.MPI_TAG, comm_,
+              &requests_[reqId]);
+    recv->configure(this, size, data);
   }
+  numPendingProbes_ = 0;
+}
+
+void
+MpiBackend::add_pending_recv(PendingRecvBase* pending, int collId,
+                             const IndexInfo& local, const IndexInfo& remote)
+{
+  int tag = makeUniqueTag(collId, local.rankUniqueId, remote.rankUniqueId);
+  pending->increment_join_counter();
+  pendingRecvs_[remote.rank][tag] = pending;
+  int reqId = allocate_request();
+  pending->setId(reqId);
+  listeners_[reqId] = pending;
+  requests_[reqId] = MPI_REQUEST_NULL;
+  ++numPendingProbes_;
 }
 
 int
@@ -27,6 +82,7 @@ MpiBackend::allocate_request()
 {
   int ret = requests_.size();
   requests_.emplace_back();
+  listeners_.emplace_back();
   return ret;
 }
 
@@ -34,8 +90,15 @@ void
 MpiBackend::register_dependency(task* t, mpi_async_ref& in)
 {
   for (int reqId : in.pendingRequests()){
-    t->increment_join_counter();
-    listeners_[reqId] = t;
+    if (listeners_[reqId] == (void*)REQUEST_CLEAR){
+      //oh, nothing to do
+      listeners_[reqId] = nullptr;
+    } else if (listeners_[reqId]){
+      error("listener should be null or cleared");
+    } else {
+      listeners_[reqId] = t;
+      t->increment_join_counter();
+    }
   }
   in.clearRequests();
 }
@@ -44,16 +107,22 @@ void
 MpiBackend::inform_listener(int idx)
 {
   Listener* listener = listeners_[idx];
-  listeners_[idx] = nullptr;
-  int cnt = listener->decrement_join_counter();
-  if (cnt == 0){
-    listener->finalize();
+  if (listener){
+    int cnt = listener->decrement_join_counter();
+    if (cnt == 0){
+      bool del = listener->finalize();
+      if (del) delete listener;
+      listeners_[idx] = nullptr;
+    }
+  } else {
+    listeners_[idx] = (Listener*) REQUEST_CLEAR;
   }
 }
 
 void
 MpiBackend::progress_dependencies()
 {
+  create_pending_recvs();
   int nComplete;
   MPI_Testsome(requests_.size(), requests_.data(), &nComplete,
                indices_.data(), MPI_STATUSES_IGNORE);
@@ -98,6 +167,13 @@ MpiBackend::allocate_temp_buffer(int size)
 }
 
 void
+MpiBackend::free_temp_buffer(void* buf, int size)
+{
+  char* cbuf = (char*) buf;
+  delete [] cbuf;
+}
+
+void
 MpiBackend::clear_dependencies()
 {
   create_pending_recvs();
@@ -110,9 +186,23 @@ MpiBackend::clear_dependencies()
 }
 
 void
-MpiBackend::error(const std::string& error)
+MpiBackend::debug(const char *fmt, ...)
 {
-  std::cerr << error << std::endl;
+  va_list args;
+  va_start(args, fmt);
+  vfprintf(stdout, fmt, args);
+  va_end(args);
+  fflush(stdout);
+}
+
+void
+MpiBackend::error(const char *fmt, ...)
+{
+  va_list args;
+  va_start(args, fmt);
+  vfprintf(stderr, fmt, args);
+  va_end(args);
+  fflush(stderr);
   abort();
 }
 
@@ -126,8 +216,39 @@ MpiBackend::clear_tasks()
 }
 
 void
-MpiBackend::make_rank_mapping(int total_size, std::vector<int>& mapping, const std::vector<int>& local)
+MpiBackend::send_data(mpi_async_ref& ref, int collId,
+                      const IndexInfo& src, const IndexInfo& dst,
+                      void* data, int size)
 {
-  //do a prefix sum or something
+  int tag = makeUniqueTag(collId, dst.rankUniqueId, src.rankUniqueId);
+  int request = allocate_request();
+  ref.addRequest(request);
+  MPI_Request* reqPtr = &requests_[request];
+  MPI_Isend(data, size, MPI_BYTE, dst.rank, tag, comm_, reqPtr);
 }
 
+void
+MpiBackend::make_rank_mapping(int nEntriesGlobal, std::vector<IndexInfo>& mapping, std::vector<int>& local)
+{
+  if (nEntriesGlobal % size_){
+    error("do not yet support collections that do not evenly divide ranks");
+  }
+  //do a prefix sum or something in future versions
+  int entriesPer = nEntriesGlobal;
+  mapping.resize(nEntriesGlobal);
+  for (int i=0; i < nEntriesGlobal; ++i){
+    int rank = i / entriesPer;
+    mapping[i].rank = rank;
+    mapping[i].rankUniqueId = i % entriesPer;
+    if (rank == rank_){
+      local.push_back(i);
+    }
+  }
+}
+
+void
+PendingRecvBase::clear()
+{
+  int* i = (int*) data_;
+  be_->free_temp_buffer(data_, size_);
+}

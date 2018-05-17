@@ -3,6 +3,7 @@
 
 #include <map>
 #include <vector>
+#include "mpi_phase.h"
 
 template <class Idx>
 struct Linearization {};
@@ -25,38 +26,52 @@ struct collection_base {
   int id() const {
     return id_;
   }
+
  private:
   int id_;
 };
 
 template <class T, class Idx>
 struct collection : public collection_base {
-  collection(int size) : size_(size) {}
+  collection(int size) : size_(size),  initialized_(false) {}
 
   T* getElement(int idx){
-    return local_elements_[idx];
+    auto iter = local_elements_.find(idx);
+    return iter == local_elements_.end() ? nullptr : iter->second;
   }
 
   void setElement(int idx, T* t){
     local_elements_[idx] = t;
   }
 
+  int size() const {
+    return size_;
+  }
+
   int getRank(int index){
     return index_mapping_[index].rank;
   }
 
-  struct EntryInfo {
-    int rank;
-    int rankUniqueId;
-  };
+  bool initialized() const {
+    return initialized_;
+  }
 
-  const EntryInfo& getEntryInfo(int index){
+  void setInitializ() {
+    initialized_ = true;
+  }
+
+  void initPhase(Phase<int>& ph){
+    index_mapping_ = ph.mapping();
+  }
+
+  const IndexInfo& getIndexInfo(int index){
     return index_mapping_[index];
   }
 
-  std::vector<EntryInfo> index_mapping_;
+  std::vector<IndexInfo> index_mapping_;
   std::map<int, T*> local_elements_;
   int size_;
+  bool initialized_;
 
 };
 

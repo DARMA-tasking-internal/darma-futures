@@ -114,6 +114,41 @@ struct tuple_return_type_selector<Selector,1,async_ref<T,Imm,Sched>,Args...> {
   using type_t = typename reverse_tuple<sizeof...(Args)+1,Args...,async_ref<T,Imm,Sched>>::type_t;
 };
 
+template <template <class> class Selector, int N, class T, class... Args>
+struct output_tuple_selector {
+  auto operator()(T& t, Args&... args){
+    return output_tuple_selector<Selector,N-1,Args...>()(args...);
+  }
+};
+
+template <template <class> class Selector, int N, class T, class Imm, class Sched, class... Args>
+struct output_tuple_selector<Selector,N,async_ref<T,Imm,Sched>,Args...> {
+  auto operator()(async_ref<T,Imm,Sched>& t, Args&... args){
+    using next_t = typename Selector<async_ref<T,Imm,Sched>>::type_t;
+    next_t ret = next_t::clone(&t);
+    auto front = std::make_tuple<next_t>(std::move(ret));
+    auto back =  output_tuple_selector<Selector,N-1,Args...>()(args...);
+    return std::tuple_cat(std::move(front), std::move(back));
+  }
+};
+
+template <template <class> class Selector, class T>
+struct output_tuple_selector<Selector,1,T> {
+  auto operator()(T& t){
+    return std::make_tuple(); //send back empty
+  }
+};
+
+template <template <class> class Selector, class T, class Imm, class Sched>
+struct output_tuple_selector<Selector,1,async_ref<T,Imm,Sched>> {
+  auto operator()(async_ref<T,Imm,Sched>& t){
+    using next_t = typename Selector<async_ref<T,Imm,Sched>>::type_t;
+    next_t ret = next_t::clone(&t);
+    return std::make_tuple<next_t>(std::move(ret));
+  }
+};
+
+
 template <class T>
 struct ro_return_type_selector {
   using type_t=T;
@@ -149,6 +184,16 @@ struct is_async_ref_type<async_ref_base<T>> {
   constexpr static bool value = true;
 };
 
+template <class T>
+struct is_collection_ref {
+  constexpr static bool value = false;
+};
+
+template <class T, class Index>
+struct is_collection_ref<async_ref_base<collection<T,Index>>> {
+  constexpr static bool value = true;
+};
+
 namespace detail {
 
 template <class T, class Enable = void>
@@ -176,17 +221,56 @@ struct tuple_set_async_refs_terminate_id {
        terminateID_
     );
  
-    tuple_set_async_refs_terminate_id<Remainder-1, Idx+1>()(std::forward<ArgsTupleDeduced>(args_tuple), terminateID_); 
+    tuple_set_async_refs_terminate_id<Remainder-1, Idx+1>()(std::forward<ArgsTupleDeduced>(args_tuple), terminateID_);
   }
 
 };
 
 template <int Idx>
 struct tuple_set_async_refs_terminate_id<0, Idx> {
-
   template <class ArgsTupleDeduced>
   void operator()(ArgsTupleDeduced&& args_tuple, int terminateID_) { /*terminate*/ }
+};
 
+namespace detail {
+
+template <class T, class Enable = void>
+struct apply_collection {
+  template <class Operator>
+  void operator()(T&& object, Operator&& op) { /*do nothing*/ }
+};
+
+template <class T>
+struct apply_collection<T, std::enable_if_t<is_collection_ref<std::decay_t<T>>::value>> {
+  template <class Operator>
+  void operator()(T&& object, Operator&& op) {
+    op(object);
+  }
+};
+
+} // end namespace detail
+
+template <int Remainder, int Idx>
+struct tuple_apply_all_collection {
+
+  template <class ArgsTupleDeduced, class Operator>
+  void operator()(ArgsTupleDeduced&& args_tuple, Operator&& op) {
+
+    detail::apply_collection<decltype(std::get<Idx>(args_tuple))>()(
+       std::forward<decltype(std::get<Idx>(args_tuple))>(std::get<Idx>(args_tuple)),
+       op
+    );
+
+    tuple_apply_all_collection<Remainder-1, Idx+1>()(
+          std::forward<ArgsTupleDeduced>(args_tuple), std::forward<Operator>(op));
+  }
+
+};
+
+template <int Idx>
+struct tuple_apply_all_collection<0, Idx> {
+  template <class ArgsTupleDeduced, class Operator>
+  void operator()(ArgsTupleDeduced&& args_tuple, Operator&& op) { /*terminate*/ }
 };
 
 #endif

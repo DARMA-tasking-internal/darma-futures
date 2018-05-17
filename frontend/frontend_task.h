@@ -19,7 +19,7 @@ class FrontendTaskBase {
   template<typename Function, size_t ... I>
   auto call(Function f, Context* ctx, std::index_sequence<I ...>)
   {
-    return f(ctx, std::get<I>(args_) ...);
+    return f(ctx, std::move(std::get<I>(args_))...);
   }
 
   template<typename Function, typename Arg, size_t ... I>
@@ -45,8 +45,7 @@ struct FrontendTask : public FrontendTaskBase<Context,Functor,Args...> {
 
   auto run(Context* ctx) {
     static constexpr auto size = sizeof...(Args);
-    auto ret = Parent::call(Functor(), ctx, std::make_index_sequence<size>{}); 
-    return ret;
+    return Parent::call(Functor(), ctx, std::make_index_sequence<size>{});
   }
 };
 
