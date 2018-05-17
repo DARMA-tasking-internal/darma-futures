@@ -69,7 +69,7 @@ template <class T, class Idx>
 struct GeneratorForwarder<async_ref_base<collection<T,Idx>>> {
   template <class Context>
   auto operator()(Context* ctx, const Idx& idx, async_ref_base<collection<T,Idx>>& coll){
-    auto ret = ctx->getElement(idx,coll);
+    auto ret = ctx->get_element(idx,coll);
     return ret;
   }
 };
@@ -83,7 +83,7 @@ template <class Functor, class Context, class GenerateArg>
 struct TaskGenerateWrapper {
   template <class... Args>
   auto operator()(Context* ctx, GenerateArg& arg, Args&&... args){
-    return make_frontend_task<Functor,Context>(ctx, 
+    return make_frontend_task<Functor,Context>(ctx, arg,
             generatorForward<Context,GenerateArg,Args>(ctx,arg,args)...);
   }
 };

@@ -2,18 +2,16 @@
 #define mpi_task_h
 
 #include "frontend.h"
+#include "mpi_listener.h"
+
+struct collection_base;
 
 template <class Context>
-struct TaskBase {
-  TaskBase() : join_counter_(0), counters_(nullptr) {}
+struct TaskBase : public Listener {
+  TaskBase() : 
+    counters_(nullptr)
+  {}
 
-  void increment_join_counter(){ ++join_counter_; }
-
-  int decrement_join_counter(){ --join_counter_; return join_counter_; }
-
-  int join_counter() const {
-    return join_counter_;
-  }
 
   virtual void run(Context* ctx) = 0;
 
@@ -27,7 +25,6 @@ struct TaskBase {
 
  private:
   PerformanceCounter* counters_;
-  int join_counter_;
 };
 
 template <class Context, class FrontendTask>

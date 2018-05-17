@@ -17,8 +17,20 @@ struct Linearization<int> {
   }
 };
 
+struct collection_base {
+  void setId(int id){
+    id_ = id;
+  }
+  
+  int id() const {
+    return id_;
+  }
+ private:
+  int id_;
+};
+
 template <class T, class Idx>
-struct collection {
+struct collection : public collection_base {
   collection(int size) : size_(size) {}
 
   T* getElement(int idx){
@@ -29,6 +41,20 @@ struct collection {
     local_elements_[idx] = t;
   }
 
+  int getRank(int index){
+    return index_mapping_[index].rank;
+  }
+
+  struct EntryInfo {
+    int rank;
+    int rankUniqueId;
+  };
+
+  const EntryInfo& getEntryInfo(int index){
+    return index_mapping_[index];
+  }
+
+  std::vector<EntryInfo> index_mapping_;
   std::map<int, T*> local_elements_;
   int size_;
 

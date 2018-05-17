@@ -48,12 +48,12 @@ struct DarmaSwarm {
  struct MpiOut {};
 
  struct Move {
-  auto operator()(Context* ctx, async_ref_mm<Swarm> swarm, async_ref_mm<int> nmoved){
+  auto operator()(Context* ctx, int index, async_ref_mm<Swarm> swarm, async_ref_mm<int> nmoved){
     *nmoved = swarm->move();
     auto swarm_nm = ctx->modify(std::move(swarm));
     for (auto& bnd : swarm->boundaries()){
-      swarm_nm = ctx->send<MigrateAccessor>(bnd,std::move(swarm_nm)); 
-      swarm_nm = ctx->recv<MigrateAccessor>(bnd,std::move(swarm_nm));
+      swarm_nm = ctx->send<MigrateAccessor>(index,bnd,std::move(swarm_nm));
+      swarm_nm = ctx->recv<MigrateAccessor>(index,bnd,std::move(swarm_nm));
     }
     return std::make_tuple(std::move(swarm_nm),std::move(nmoved));
   }

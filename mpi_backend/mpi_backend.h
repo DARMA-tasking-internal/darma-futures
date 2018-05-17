@@ -6,12 +6,15 @@
 #include "mpi_send_recv.h"
 #include "mpi_phase.h"
 #include "mpi_predicate.h"
+#include "mpi_pending_recv.h"
 
 #include <darma/serialization/simple_handler.h>
 #include <darma/serialization/serializers/all.h>
 
 #include <mpi.h>
 #include <list>
+#include <vector>
+#include <map>
 
 /**
   allocate_ -> implies a pointer return
@@ -24,6 +27,8 @@ struct MpiBackend {
 
   MpiBackend(MPI_Comm comm) : comm_(comm) {}
 
+  void error(const std::string& str);
+
   Context& frontend() {
     return *static_cast<Context*>(this);
   }
@@ -34,8 +39,10 @@ struct MpiBackend {
   }
 
   template <class T, class Idx>
-  auto make_collection(Idx idx){
-    return async_ref<collection<T,Idx>,None,Modify>(idx);
+  auto make_collection(Idx size){
+    async_ref<collection<T,Idx>,None,Modify> ret(size);
+    ret->setId(collIdCtr_++);
+    return ret;
   }
 
   template <class Idx>
@@ -127,33 +134,50 @@ struct MpiBackend {
   //      gets moved to a header file in DARMA serialization and organized into a handler
   using local_handler_t = darma::serialization::SimpleSerializationHandler<>;
 
-  template <class Accessor, class T,
-            class Index, class... Args>
-  auto make_send_op(async_ref_base<T>&& ref, 
-                    Index&& idx, Args&&... args){
-    // TODO get is_local from somewhere
-    bool is_local = false;
+  struct TagMaker {
+    uint16_t collId;
+    uint16_t dstId;
+  };
 
-    if(not is_local) {
+  int makeUniqueTag(int collId, int dstId){
+    //this is dirty - but don't hate
+    TagMaker tag;  
+    tag.collId = collId;
+    tag.dstId = dstId;
+    return *reinterpret_cast<int*>(&tag);
+  }
+
+  template <class Accessor, class T, class LocalIndex, class RemoteIndex>
+  auto make_send_op(async_ref_base<T>&& ref, LocalIndex&& local, RemoteIndex&& remote){
+    using index_t = std::decay_t<LocalIndex>;
+    if (!ref.hasParent()){
+      error("sending object with no parent collection");
+    }
+
+    auto* parent = ref.template getParent<index_t>();
+    auto& dst = parent->getEntryInfo(remote);
+    int dstRank = dst.rank;
+    int tag = makeUniqueTag(parent->id(), dst.rankUniqueId);
+
+    int request = allocate_request();
+    ref.addRequest(request);
+
+    bool is_local = false; //push everything through MPI for now
+
+    if(is_local) {
+      //extra work needed here to put a local listener in the list
+    } else {
       // The templated methods below operate on an instance, in case you need
       // something like a stateful allocator at some point in the future.
       // (All SerializationHandlers that are currently implemented, though,
       // use static methods for everything).
       auto buffer = make_packed_buffer<Accessor>(
         non_local_handler_t{},
-        ref, std::forward<Index>(idx)
+        ref, std::forward<RemoteIndex>(remote)
       );
-      // buffer owns the packed data.
-      // buffer.data() is a `char*` pointing to the beginning of the packed data
-      // buffer.capacity() is the size of the data (bad name, I know)
-    }
-    else {
-      auto buffer = make_packed_buffer<Accessor>(
-        local_handler_t{}, ref, std::forward<Index>(idx)
-      );
-      // buffer owns the packed data.
-      // buffer.data() is a `char*` pointing to the beginning of the packed data
-      // buffer.capacity() is the size of the data (bad name, I know)
+      MPI_Request* reqPtr = &requests_[request];
+      MPI_Isend(buffer.data(), buffer.capacity(), MPI_BYTE, dstRank, tag, 
+                comm_, reqPtr);
     }
 
     //size
@@ -166,8 +190,7 @@ struct MpiBackend {
   template <class Accessor, class SerializationHandler,
             class T, class Index>
   auto make_packed_buffer(SerializationHandler&& handler,
-                          async_ref_base<T>& ref,
-                          Index&& idx){
+                          async_ref_base<T>& ref, Index&& idx){
     auto s_ar = handler.make_sizing_archive();
     // TODO pass idx to the Accessor (if that's part of the concept?)
     Accessor::compute_size(*ref, idx, s_ar);
@@ -191,58 +214,19 @@ struct MpiBackend {
     return op;
   };
 
-  template <class Accessor, class T, class Index>
-  auto make_recv_op(async_ref_base<T>&& ref,
-                    Index&& idx){
-
-    size_t size; //get this from a probe/etc
-    void* data; //get this from a temp buffer
-    //size
-    //post the MPI request with a tag from att
-
-    //MPI_Irecv(..., op.getArgument().allocateRequest());
-    // TODO get is_local from somewhere
-    bool is_local = false;
-
-    // TODO get data and size from somewhere (or just pass them in?)
-
-    std::decay_t<Index> incoming;
-
-    if(not is_local) {
-      // See notes in make_send_op()
-      unpack_object_from_buffer<Accessor>(
-        non_local_handler_t{},
-        ref, data, size, incoming
-      );
-    } else {
-      unpack_object_from_buffer<Accessor>(
-        local_handler_t{},
-        ref, data, size, incoming
-      );
-    }
+  template <class Accessor, class T, class LocalIndex, class RemoteIndex>
+  auto make_recv_op(async_ref_base<T>&& ref, LocalIndex&& local, RemoteIndex&& remote){
+    using index_t = std::decay_t<LocalIndex>;
+    auto* parent = ref.template getParent<index_t>();
+    auto& localEntry = parent->getEntryInfo(local);
+    auto& remoteEntry = parent->getEntryInfo(remote);
+    int tag = makeUniqueTag(parent->id(), localEntry.rankUniqueId);
+    auto* pending = new NonLocalPendingRecv<Accessor,T,index_t>;
+    pending->setObject(ref.get());
+    pendingRecvs_[remoteEntry.rank][tag] = pending;
     RecvOp<T> op(std::move(ref));
     return op;
   };
-
-  template <class Accessor, class SerializationHandler,
-            class T, class Index>
-  void unpack_object_from_buffer(SerializationHandler&& handler,
-                                 async_ref_base<T>& ref,
-                                 void* data, size_t size,
-                                 Index&& idx){
-    auto u_ar = handler.make_unpacking_archive(
-      darma::serialization::NonOwningSerializationBuffer(data, size)
-    );
-    // Assumptions: `*ref` is allocated but not initialized.  If it's also
-    //              initialized, you'll need to used the allocator to destroy it
-    //              like this:
-    // using original_alloc_t = typename decltype(u_ar)::accessor_type;
-    // using alloc_t = typename std::allocator_traits<original_alloc_t>::template rebind_alloc<T>;
-    // alloc_t alloc = u_ar.template get_allocator_as<alloc_t>();
-    // std::allocator_traits<alloc_t>::destroy(alloc, &*ref);
-    // TODO forward idx to the Accessor (if that's part of the concept?)
-    Accessor::unpack(*ref, u_ar);
-  }
 
   template <class SendOp>
   auto register_send_op(SendOp&& op){
@@ -320,8 +304,10 @@ struct MpiBackend {
   }
 
   template <class Index, class T>
-  auto getElement(const Index& idx, async_ref_base<collection<T,Index>>& coll){
-    return async_ref_base<T>(coll->getElement(idx));
+  auto get_element(const Index& idx, async_ref_base<collection<T,Index>>& coll){
+    async_ref_base<T> ret(coll->getElement(idx));
+    ret.setParent(coll.get());
+    return ret;
   }
 
   template <class Op, class T, class U>
@@ -335,14 +321,21 @@ struct MpiBackend {
   void clear_dependencies();
   void clear_tasks();
   void clear_queues();
+  void* allocate_temp_buffer(int size);
   void make_rank_mapping(int total_size, std::vector<int>& mapping, const std::vector<int>& local);
+  int allocate_request();
+  void create_pending_recvs();
 
  private:
-  std::vector<task*> listeners_;
+  std::vector<Listener*> listeners_;
   std::vector<int> indices_;
   std::vector<MPI_Request> requests_;
   std::list<task*> taskQueue_;
+  std::vector<std::map<int,PendingRecvBase*>> pendingRecvs_;
   MPI_Comm comm_;
+  int rank_;
+  int collIdCtr_;
+  int numPendingProbes_;
 
 };
 
