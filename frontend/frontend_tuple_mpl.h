@@ -126,7 +126,7 @@ struct output_tuple_selector<Selector,N,async_ref<T,Imm,Sched>,Args...> {
   auto operator()(async_ref<T,Imm,Sched>& t, Args&... args){
     using next_t = typename Selector<async_ref<T,Imm,Sched>>::type_t;
     next_t ret = next_t::clone(&t);
-    auto front = std::make_tuple<next_t>(std::move(ret));
+    auto front = std::make_tuple(std::move(ret));
     auto back =  output_tuple_selector<Selector,N-1,Args...>()(args...);
     return std::tuple_cat(std::move(front), std::move(back));
   }
@@ -144,7 +144,7 @@ struct output_tuple_selector<Selector,1,async_ref<T,Imm,Sched>> {
   auto operator()(async_ref<T,Imm,Sched>& t){
     using next_t = typename Selector<async_ref<T,Imm,Sched>>::type_t;
     next_t ret = next_t::clone(&t);
-    return std::make_tuple<next_t>(std::move(ret));
+    return std::make_tuple(std::move(ret));
   }
 };
 
