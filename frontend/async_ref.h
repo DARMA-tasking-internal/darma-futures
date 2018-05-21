@@ -20,11 +20,10 @@ struct async_ref : public async_ref_base<T> {
   async_ref(async_ref_base<T>&& old) : async_ref_base<T>(std::move(old)){}
 
   async_ref& operator=(async_ref&& t) = default;
-  async_ref& operator=(async_ref& t) = default;
 
   template <class... Args>
   static async_ref<T,Imm,Sched> make(Args&&... args){
-    async_ref<T,Imm,Sched> ret(std::forward<Args>(args)...);
+    async_ref<T,Imm,Sched> ret(in_place_construct, std::forward<Args>(args)...);
     return ret;
   }
 
@@ -38,13 +37,13 @@ struct async_ref : public async_ref_base<T> {
   }
 
  private:
-  async_ref<T,Imm,Sched>(empty_tag tag) : async_ref_base<T>(tag){}
+  explicit async_ref<T,Imm,Sched>(empty_tag tag) : async_ref_base<T>(tag){}
 
-  async_ref(async_ref_base<T>* old) : async_ref_base<T>(old) {}
+  explicit async_ref(async_ref_base<T>* old) : async_ref_base<T>(old) {}
 
   template <class... Args>
-  async_ref(Args&&... args) :
-    async_ref_base<T>(std::forward<Args>(args)...)
+  explicit async_ref(in_place_construct_t, Args&&... args) :
+    async_ref_base<T>(in_place_construct, std::forward<Args>(args)...)
   {}
 };
 

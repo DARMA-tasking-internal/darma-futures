@@ -132,8 +132,7 @@ struct Frontend : public Backend {
 
     //some sort of registration
     auto red_ret = Backend::template register_phase_reduce<Functor>(ph, std::move(coll), coll_ret);
-    return std::make_tuple<async_ref<T,None,Modify>,async_collection<T,Idx>>
-        (std::move(red_ret), std::move(coll_ret));
+    return std::make_tuple(std::move(red_ret), std::move(coll_ret));
   }
 
   template <class T, class Idx>
