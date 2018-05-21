@@ -1,7 +1,7 @@
 
 find_package(MPI REQUIRED)
 
-add_library(darma mpi_backend.cc gather.cc)
+add_library(darma mpi_backend.cc gather.cc broadcast.cc)
 add_library(darma::darma ALIAS darma)
 target_include_directories(darma PUBLIC
   $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/mpi_backend>
