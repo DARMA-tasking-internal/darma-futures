@@ -76,6 +76,10 @@ struct MpiBackend {
     return true;
   }
 
+  bool is_root() const {
+    return rank_ == 0;
+  }
+
   void run_worker(){}
 
   template <class Idx>
