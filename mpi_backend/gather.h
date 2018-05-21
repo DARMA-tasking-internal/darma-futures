@@ -13,11 +13,22 @@ namespace darma_backend {
                     int root, MPI_Comm comm = MPI_COMM_WORLD);
   }
   
+  /**
+   * Perform a gather operation. This operation gathers all elements of a collection
+   * and yields a vector containing those elements, ordered by rank.
+   * 
+   * @tparam    T               The type of data stored in the collection
+   * @tparam    IndexType       The index type of the collection
+   * @param     collection      The collection to gather from
+   * @param     root            The rank of the process that receives the data
+   * @param     comm            The MPI communicator used for the gather operation
+   * @return                    A vector containing all the elements in the collection in rank order.
+   */
   template<typename T, typename IndexType>
   async_ref<std::vector<T>, None, Modify>
-  gather(async_collection<T, IndexType> &&_collection, int root,
+  gather(async_collection<T, IndexType> &&collection, int root,
          MPI_Comm comm = MPI_COMM_WORLD) {
-    auto &outcoll = *_collection;
+    auto &outcoll = *collection;
     
     auto sar = serializer::make_packing_archive(sizeof(std::size_t) + outcoll.local_elements_.size() * sizeof(T));
     sar << outcoll.local_elements_.size();

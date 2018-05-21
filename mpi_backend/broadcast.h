@@ -20,6 +20,17 @@ namespace darma_backend {
     void broadcast_internal(serialization_buffer &buff, int root, MPI_Comm comm = MPI_COMM_WORLD);
   }
   
+  /**
+   * Perform a broadcast operation. Data broadcast by the root rank will be vailable on
+   * all ranks in the communicator. This yields a collection which represents data
+   * that may not be on-rank.
+   * @tparam    IndexType   The index type for the resulting collection
+   * @tparam    T           The type of the data to broadcast
+   * @param     ref         The data to broadcast
+   * @param     root        The rank of the broadcasting process
+   * @param     comm        The MPI communicator to use for the broadcast
+   * @return                The collection containing the broadcasted data
+   */
   template<typename IndexType, typename T>
   async_collection<T, IndexType>
   broadcast(async_ref<T, None, Modify> &&ref, int root, MPI_Comm comm = MPI_COMM_WORLD) {
