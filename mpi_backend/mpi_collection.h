@@ -3,6 +3,7 @@
 
 #include <map>
 #include <vector>
+#include "mpi_phase.h"
 
 template <class Idx>
 struct Linearization {};
@@ -43,6 +44,10 @@ struct collection : public collection_base {
     local_elements_[idx] = t;
   }
 
+  int size() const {
+    return size_;
+  }
+
   int getRank(int index){
     return index_mapping_[index].rank;
   }
@@ -53,6 +58,10 @@ struct collection : public collection_base {
 
   void setInitializ() {
     initialized_ = true;
+  }
+
+  void initPhase(Phase<int>& ph){
+    index_mapping_ = ph.mapping();
   }
 
   const IndexInfo& getIndexInfo(int index){

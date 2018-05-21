@@ -24,23 +24,26 @@ struct Swarm {
 struct DarmaSwarm {
  struct MigrateAccessor {
     template <class Archive>
-    static void pack(Swarm& p, int index, Archive& ar){
-      ar | index;
+    static void pack(Swarm& p, int local, int remote, Archive& ar){
+      ar | local;
+      ar | remote;
       //pack a vector or something
     }
 
     template <class Archive>
     static void unpack(Swarm& p, Archive& ar){
-      int neighbor;
+      int remote;
+      int local;
       std::vector<double> values;
-      ar | neighbor;
+      ar | remote;
+      ar | local;
       //ar | values;
       //loop incoming values from that neighbor and put them in correct location
     }
 
     template <class Archive>
-    static void compute_size(Swarm& p, int index, Archive& ar){
-      pack(p,index,ar);
+    static void compute_size(Swarm& p, int local, int remote, Archive& ar){
+      pack(p,local,remote,ar);
     }
  };
 
@@ -50,12 +53,15 @@ struct DarmaSwarm {
  struct Move {
   auto operator()(Context* ctx, int index, async_ref_mm<Swarm> swarm, async_ref_mm<int> nmoved){
     *nmoved = swarm->move();
-    auto swarm_nm = ctx->modify(std::move(swarm));
+    auto swarm_sent = ctx->to_recv(std::move(swarm));
     for (auto& bnd : swarm->boundaries()){
-      swarm_nm = ctx->send<MigrateAccessor>(index,bnd,std::move(swarm_nm));
-      swarm_nm = ctx->recv<MigrateAccessor>(index,bnd,std::move(swarm_nm));
+      swarm_sent = ctx->send<MigrateAccessor>(index,bnd,std::move(swarm_sent));
     }
-    return std::make_tuple(std::move(swarm_nm),std::move(nmoved));
+    auto swarm_recvd = ctx->to_send(std::move(swarm_sent));
+    for (auto& bnd : swarm->boundaries()){
+      swarm_recvd = ctx->recv<MigrateAccessor>(index,bnd,std::move(swarm_recvd));
+    }
+    return std::make_tuple(std::move(swarm_recvd),std::move(nmoved));
   }
  };
 

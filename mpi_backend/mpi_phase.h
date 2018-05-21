@@ -34,6 +34,10 @@ struct PhaseData {
   return local_.end();
  }
 
+ const std::vector<IndexInfo>& mapping() const {
+   return index_to_rank_mapping_;
+ }
+
  private:
   int size_;
   std::vector<IndexInfo> index_to_rank_mapping_;
@@ -51,6 +55,10 @@ struct Phase {
 
  bool active() const {
   return bool(data_);
+ }
+
+ const std::vector<IndexInfo>& mapping() const {
+   return data_->mapping();
  }
 
  PhaseData* operator->() const {

@@ -185,12 +185,12 @@ struct is_async_ref_type<async_ref_base<T>> {
 };
 
 template <class T>
-struct is_collection_type {
+struct is_collection_ref {
   constexpr static bool value = false;
 };
 
 template <class T, class Index>
-struct is_collection_type<collection<T,Index>> {
+struct is_collection_ref<async_ref_base<collection<T,Index>>> {
   constexpr static bool value = true;
 };
 
@@ -237,13 +237,13 @@ namespace detail {
 template <class T, class Enable = void>
 struct apply_collection {
   template <class Operator>
-  void operator()(T&& object, Operator& op) { /*do nothing*/ }
+  void operator()(T&& object, Operator&& op) { /*do nothing*/ }
 };
 
 template <class T>
-struct apply_collection<T, std::enable_if_t<is_collection_type<std::decay_t<T>>::value>> {
+struct apply_collection<T, std::enable_if_t<is_collection_ref<std::decay_t<T>>::value>> {
   template <class Operator>
-  void operator()(T&& object, Operator& op) {
+  void operator()(T&& object, Operator&& op) {
     op(object);
   }
 };
@@ -254,14 +254,15 @@ template <int Remainder, int Idx>
 struct tuple_apply_all_collection {
 
   template <class ArgsTupleDeduced, class Operator>
-  void operator()(ArgsTupleDeduced&& args_tuple, Operator& op) {
+  void operator()(ArgsTupleDeduced&& args_tuple, Operator&& op) {
 
     detail::apply_collection<decltype(std::get<Idx>(args_tuple))>()(
        std::forward<decltype(std::get<Idx>(args_tuple))>(std::get<Idx>(args_tuple)),
        op
     );
 
-    tuple_apply_all_collection<Remainder-1, Idx+1>()(std::forward<ArgsTupleDeduced>(args_tuple), op);
+    tuple_apply_all_collection<Remainder-1, Idx+1>()(
+          std::forward<ArgsTupleDeduced>(args_tuple), std::forward<Operator>(op));
   }
 
 };
@@ -269,7 +270,7 @@ struct tuple_apply_all_collection {
 template <int Idx>
 struct tuple_apply_all_collection<0, Idx> {
   template <class ArgsTupleDeduced, class Operator>
-  void operator()(ArgsTupleDeduced&& args_tuple, Operator& op) { /*terminate*/ }
+  void operator()(ArgsTupleDeduced&& args_tuple, Operator&& op) { /*terminate*/ }
 };
 
 #endif

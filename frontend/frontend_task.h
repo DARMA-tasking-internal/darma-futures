@@ -43,10 +43,9 @@ struct FrontendTask : public FrontendTaskBase<Context,Functor,Args...> {
     Parent(std::forward<InArgs>(args)...)
   {}
 
-  auto run(Context* ctx) {
+  void run(Context* ctx) {
     static constexpr auto size = sizeof...(Args);
-    auto ret = Parent::call(Functor(), ctx, std::make_index_sequence<size>{}); 
-    return ret;
+    Parent::call(Functor(), ctx, std::make_index_sequence<size>{});
   }
 };
 

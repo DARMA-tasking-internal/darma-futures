@@ -19,24 +19,33 @@ struct Frontend : public Backend {
 
 
   template <class Accessor, class LocalIndex, class RemoteIndex,
-            class T, class Imm, class Sched>
-  auto send(LocalIndex&& local, RemoteIndex&& remote, async_ref<T,Imm,Sched>&& input){
+            class T, class Imm, class Sched, class... Args>
+  auto send(LocalIndex&& local, RemoteIndex&& remote, async_ref<T,Imm,Sched>&& input, Args&&... args){
     using retType = typename DefaultSequencer::NewPermissions<ReadOnly,T,Imm,Sched>::type_t;
     auto ret = retType::clone(&input);
     //Backend::sequence(op, input, ret);
     auto op = Backend::template make_send_op<Accessor>(std::move(input), 
-      std::forward<LocalIndex>(local), std::forward<RemoteIndex>(remote));
+      std::forward<LocalIndex>(local), std::forward<RemoteIndex>(remote),
+      std::forward<Args>(args)...);
     Backend::register_send_op(std::move(op));
     return ret;
   }
 
+  /**
+   * Given a static accessor, perform the necessary sequencing operation,
+   * post a recv (or recv descriptor)
+   * @param args An optional list of arguments to be returned with the finish recv, e.g.
+   *  used for stashing neighbor info or other identifiers so that the accessor can know
+   *  what is being received
+   */
   template <class Accessor, class LocalIndex, class RemoteIndex,
-            class T, class Imm, class Sched>
-  auto recv(LocalIndex&& local, RemoteIndex&& remote, async_ref<T,Imm,Sched>&& input){
+            class T, class Imm, class Sched, class... Args>
+  auto recv(LocalIndex&& local, RemoteIndex&& remote, async_ref<T,Imm,Sched>&& input, Args&&... args){
     using retType = typename DefaultSequencer::NewPermissions<None,T,Imm,Sched>::type_t;
     retType ret = retType::clone(&input);
     auto op = Backend::template make_recv_op<Accessor>(std::move(input), 
-      std::forward<LocalIndex>(local), std::forward<RemoteIndex>(remote));
+      std::forward<LocalIndex>(local), std::forward<RemoteIndex>(remote),
+      std::forward<Args>(args)...);
     Backend::sequence(op, op.getArgument(), ret);
     Backend::register_recv_op(std::move(op));
     return ret;
@@ -54,11 +63,19 @@ struct Frontend : public Backend {
 
   template <class T, class Imm, class Sched>
   auto modify(async_ref<T,Imm,Sched>&& in){
+    //recv is forcibly deferred
     return async_ref<T,None,Sched>(std::move(in));
+  }
+
+  template <class T, class Imm, class Sched>
+  auto to_recv(async_ref<T,Imm,Sched>&& in){
+    //recv is forcibly deferred
+    return async_ref<T,typename min_permissions<Imm,ReadOnly>::type_t,Sched>(std::move(in));
   }
   
   template <class T, class Imm, class Sched>
-  auto read(async_ref<T,Imm,Sched>&& in){
+  auto to_send(async_ref<T,Imm,Sched>&& in){
+    //send is not forcibly deferred
     return async_ref<T,typename min_permissions<Imm,ReadOnly>::type_t,Sched>(std::move(in));
   }
 
@@ -107,16 +124,16 @@ struct Frontend : public Backend {
     return std::make_tuple(std::move(pred_task), std::move(ret));
   }
 
-  template <class Functor, class Phase, class Idx, class T>
-  auto phase_reduce(Phase& ph, async_ref<collection<Idx,T>,None,Modify>&& coll){
-    async_ref<collection<Idx,T>,None,Modify> coll_ret(std::move(coll));
+  template <class Functor, class Phase,  class T, class Idx>
+  auto phase_reduce(Phase& ph, async_ref<collection<T,Idx>,None,Modify>&& coll){
+    async_ref<collection<T,Idx>,None,Modify> coll_ret(std::move(coll));
 
     //Backend::sequence(coll, coll_ret);
 
     //some sort of registration
     auto red_ret = Backend::template register_phase_reduce<Functor>(ph, std::move(coll), coll_ret);
-
-    return std::make_tuple(async_ref<T,None,Modify>(std::move(red_ret)), std::move(coll_ret));
+    return std::make_tuple<async_ref<T,None,Modify>,async_collection<T,Idx>>
+        (std::move(red_ret), std::move(coll_ret));
   }
 
   template <class T, class Idx>
@@ -168,6 +185,18 @@ struct Frontend : public Backend {
     return out;
   }
 
+  template <class Phase>
+  struct InitIndexing {
+    InitIndexing(Phase& ph) : ph_(ph) {}
+
+    template <class Collection>
+    void operator()(Collection& coll){
+      coll->initPhase(ph_);
+    }
+
+    Phase& ph_;
+  };
+
   template <class Functor, class Phase, class... Args>
   auto create_phase_work(Phase& ph, Args&&... args){
     auto out = output_tuple_selector<mod_return_type_selector,sizeof...(Args),
@@ -180,6 +209,8 @@ struct Frontend : public Backend {
 
     fe_task_t fe_task(std::forward<Args>(args)...);
     tuple_sequencer<sizeof...(Args),0,0,fe_task_t,decltype(out)>()(this,fe_task,out);
+
+    tuple_apply_all_collection<sizeof...(Args), 0>()(fe_task.getArgs(), InitIndexing<Phase>(ph));
 
     //some sort of registration
     Backend::register_phase_collection(ph, std::move(fe_task));
