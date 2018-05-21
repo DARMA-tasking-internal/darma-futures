@@ -100,16 +100,16 @@ struct async_ref_base : public mpi_async_ref {
  protected:
   friend class MpiBackend;
 
-  async_ref_base(empty_tag tag) : t_(nullptr), parent_(nullptr){}
+  explicit async_ref_base(empty_tag tag) : t_(nullptr), parent_(nullptr){}
 
-  async_ref_base(async_ref_base* old) : //ptr to delete copy constructor
+  explicit async_ref_base(async_ref_base* old) : //ptr to delete copy constructor
     parent_(old->parent_),
     t_(old->t_)
   {
   }
 
   template <class... Args>
-  async_ref_base(in_place_construct_t, Args&&... args) : parent_(nullptr) {
+  explicit async_ref_base(in_place_construct_t, Args&&... args) : parent_(nullptr) {
     //only backend can call this ctor
     t_ = new T(std::forward<Args>(args)...);
   }
