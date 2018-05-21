@@ -21,5 +21,6 @@ set (DarmaConcept_VERSION_MINOR 1)
 add_subdirectory(frontend)
 add_subdirectory(mpi_backend)
 add_subdirectory(examples)
+add_subdirectory(tests)
 
 
