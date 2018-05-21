@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <mpi_backend.h>
 #include <gather.h>
+#include <mpi_collection.h>
 
 TEST(mpi_gather_test, GatherInternal) { // NOLINT
   const std::vector<int> element_vector = {5, 9, 3, 7, 11, 2, 1, 20};
@@ -37,9 +38,10 @@ TEST(mpi_gather_test, GatherAsyncRef) { // NOLINT
   int nranks;
   MPI_Comm_size(MPI_COMM_WORLD, &nranks);
   
-  auto num_elements = static_cast< int >(element_vector.size() / nranks);
+  int start, end;
+  std::tie(start, end) = range_for_rank(rank, nranks, 0, static_cast<int>(element_vector.size()));
   
-  for ( int i = num_elements * rank; i < num_elements * ( rank + 1 ); ++i )
+  for (int i = start; i < end; ++i)
     coll.setElement(i, &element_vector[i]);
   
   auto ref = async_collection<int, int>(coll);
@@ -48,6 +50,6 @@ TEST(mpi_gather_test, GatherAsyncRef) { // NOLINT
   
   const auto &v = *retref;
   
-  if ( rank == 0 )
+  if (rank == 0)
     EXPECT_TRUE(std::equal(element_vector.begin(), element_vector.end(), v.begin(), v.end()));
 }
