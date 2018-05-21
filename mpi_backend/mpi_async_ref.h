@@ -41,6 +41,9 @@ struct mpi_async_ref {
 
 template <class T, class Imm, class Sched> class async_ref;
 
+struct in_place_construct_t { };
+static constexpr in_place_construct_t in_place_construct = { };
+
 template <class T>
 struct async_ref_base : public mpi_async_ref {
   async_ref_base(T* t) : t_(t), parent_(nullptr) {}
@@ -58,7 +61,7 @@ struct async_ref_base : public mpi_async_ref {
 
   template <class... Args>
   static async_ref_base<T> make(Args&&... args){
-    return async_ref_base<T>(std::forward<Args>(args)...);
+    return async_ref_base<T>(in_place_construct, std::forward<Args>(args)...);
   }
 
   bool hasParent() const {
@@ -106,7 +109,7 @@ struct async_ref_base : public mpi_async_ref {
   }
 
   template <class... Args>
-  async_ref_base(Args&&... args) : parent_(nullptr) {
+  async_ref_base(in_place_construct_t, Args&&... args) : parent_(nullptr) {
     //only backend can call this ctor
     t_ = new T(std::forward<Args>(args)...);
   }

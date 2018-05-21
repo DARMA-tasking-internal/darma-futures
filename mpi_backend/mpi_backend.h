@@ -282,7 +282,7 @@ struct MpiBackend {
                   Functor::mpiType(identity),
                   Functor::mpiOp(identity),
                   comm_);
-    return async_ref_base<T>(std::move(identity));
+    return async_ref_base<T>(in_place_construct, std::move(identity));
   }
 
   template <class T, class Index>
