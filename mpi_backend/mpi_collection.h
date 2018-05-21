@@ -3,6 +3,7 @@
 
 #include <map>
 #include <vector>
+#include <utility>
 #include "mpi_phase.h"
 
 template <class Idx>
@@ -16,6 +17,27 @@ struct Linearization<int> {
   int fromLinear(int rank, int size){
     return rank;
   }
+};
+
+template<typename IndexType>
+std::pair<IndexType, IndexType>
+range_for_rank(int rank, int nranks, IndexType begin, IndexType end)
+{
+  auto size = end - begin;
+  
+  auto count = size / static_cast< IndexType >(nranks);
+  auto rem = size % static_cast< IndexType >(nranks);
+  
+  std::pair<IndexType, IndexType> ret;
+  if (rank < rem) {
+    ret.first = begin + rank * (count + 1);
+    ret.second = ret.first + count + 1;
+  } else {
+    ret.first = begin + rem + rank * count;
+    ret.second = ret.first + count;
+  }
+  
+  return ret;
 };
 
 struct collection_base {
