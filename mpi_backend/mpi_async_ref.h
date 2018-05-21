@@ -96,6 +96,10 @@ struct async_ref_base : public mpi_async_ref {
   operator const T&() const {
     return *t_;
   }
+  
+  explicit operator bool() const noexcept {
+    return t_ != nullptr;
+  }
 
  protected:
   friend class MpiBackend;
