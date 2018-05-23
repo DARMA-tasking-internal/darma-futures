@@ -32,8 +32,8 @@ namespace darma_backend {
    * @return                The collection containing the broadcasted data
    */
   template<typename IndexType, typename T>
-  async_collection<T, IndexType>
-  broadcast(async_ref<T, None, Modify> &&ref, int root, MPI_Comm comm = MPI_COMM_WORLD) {
+  async_ref_base<collection<T, IndexType>>
+  broadcast(async_ref_base<T> &&ref, int root, MPI_Comm comm = MPI_COMM_WORLD) {
     int nranks;
     MPI_Comm_size(comm, &nranks);
     
@@ -69,7 +69,7 @@ namespace darma_backend {
       ret.setElement(rank, new T (serializer::deserialize<T>(buff)));
     }
   
-    return async_collection<T, IndexType>(std::move(ret));
+    return async_ref_base<collection<T, IndexType>>::make(std::move(ret));
   };
 }
 

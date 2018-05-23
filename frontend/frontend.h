@@ -134,6 +134,26 @@ struct Frontend : public Backend {
     auto red_ret = Backend::template register_phase_reduce<Functor>(ph, std::move(coll), coll_ret);
     return std::make_tuple(std::move(red_ret), std::move(coll_ret));
   }
+  
+  template <class Phase, class Idx, class T>
+  auto phase_gather(Phase& ph, int root, async_ref<collection<T, Idx>, None, Modify>&& coll) {
+    
+    // TODO: sequence params
+    
+    auto registered = Backend::template register_phase_gather(ph, root, std::move(coll));
+    
+    return std::make_tuple(async_ref<std::vector<T>, None, Modify>::make(std::move(registered)));
+  }
+  
+  template <class Idx, class Phase, class T>
+  auto phase_broadcast(Phase& ph, int root, async_ref<T, None, Modify>&& ref) {
+    
+    // TODO: sequence params
+    
+    auto registered = Backend::template register_phase_broadcast<Idx>(ph, root, std::move(ref));
+    
+    return std::make_tuple(async_ref<collection<T, Idx>, None, Modify>(std::move(registered)));
+  }
 
   template <class T, class Idx>
   auto darma_collection(mpi_collection<T,Idx>& coll){

@@ -7,6 +7,8 @@
 #include "mpi_phase.h"
 #include "mpi_predicate.h"
 #include "mpi_pending_recv.h"
+#include "gather.h"
+#include "broadcast.h"
 
 #include <darma/serialization/simple_handler.h>
 #include <darma/serialization/serializers/all.h>
@@ -283,6 +285,24 @@ struct MpiBackend {
                   Functor::mpiOp(identity),
                   comm_);
     return async_ref_base<T>(in_place_construct, std::move(identity));
+  }
+  
+  template <class Phase, class T, class Idx>
+  auto register_phase_gather(Phase& ph, int root,
+                                        async_ref_base<collection<T, Idx>>&& coll_in)
+  {
+    // Finish all pending tasks
+    clear_tasks();
+    return darma_backend::gather(std::move(coll_in), root, comm_);
+  }
+  
+  template <class Idx, class Phase, class T>
+  auto register_phase_broadcast(Phase& ph, int root, 
+                                async_ref_base<T>&& ref_in)
+  {
+    // Finish all pending tasks
+    clear_tasks();
+    return darma_backend::broadcast<Idx>(std::move(ref_in), root, comm_);
   }
 
   template <class T, class Index>

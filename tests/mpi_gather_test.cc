@@ -53,3 +53,60 @@ TEST(mpi_gather_test, GatherAsyncRef) { // NOLINT
   if (rank == 0)
     EXPECT_TRUE(std::equal(element_vector.begin(), element_vector.end(), v.begin(), v.end()));
 }
+
+const
+std::vector<int> g_element_vector = {5, 9, 3, 7, 11, 2, 1, 20};
+
+struct init_test_work
+{
+  void operator()(Frontend<MpiBackend> *ctx, int index,
+                  async_ref< int, Modify, Modify > ref)
+  {
+    *ref = g_element_vector[index];
+  }
+};
+
+struct check_init
+{
+  void operator()(Frontend<MpiBackend> *ctx, int index,
+                  async_ref<int, ReadOnly, Modify> ref)
+  {
+    EXPECT_EQ(*ref, g_element_vector[index]);
+  }
+};
+
+struct check_vecs
+{
+  void operator()(Frontend<MpiBackend> *ctx,
+                  async_ref< std::vector<int>, Modify, Modify > ref)
+  {
+    const auto &vec = *ref;
+    std::cout << "vec: ";
+    for (auto &&v : vec ) {
+      std::cout << v << " ";
+    }
+    std::cout << std::endl;
+    EXPECT_TRUE(std::equal(g_element_vector.begin(), g_element_vector.end(),
+                           vec.begin(), vec.end()));
+  }
+};
+
+TEST(mpi_gather_test, GatherFrontend)
+{
+  auto dc = allocate_context(MPI_COMM_WORLD);
+  
+  auto c = dc->make_collection<int>(static_cast<int>(g_element_vector.size()));
+  auto phase = dc->make_phase(static_cast<int>(g_element_vector.size()));
+  
+  std::tie(c) = dc->create_phase_work<init_test_work>(phase, std::move(c));
+  
+  std::tie(c) = dc->create_phase_work<check_init>(phase, std::move(c));
+  
+  auto vec = dc->phase_gather(phase, 0, std::move(c));
+  
+  if ( dc->is_root() ) {
+    dc->create_work<check_vecs>(std::move(std::get<0>(vec)));
+  }
+  
+  dc->flush();
+}

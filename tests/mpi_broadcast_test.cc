@@ -49,3 +49,52 @@ TEST(mpi_broadcast_test, BroadcastAsyncRef) { // NOLINT
   
   delete ret->getElement(rank);
 }
+
+constexpr int g_testval = 17;
+
+struct init_broadcast_val
+{
+  void operator()(Frontend<MpiBackend> *ctx, async_ref<int, Modify, Modify> ref, int val)
+  {
+    *ref = val;
+  }
+};
+
+struct test_broadcasted
+{
+  void operator()(Frontend<MpiBackend> *ctx, int index,
+                  async_ref< int, Modify, Modify > ref)
+  {
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    std::cout << "test_broadcast rank " << rank << " val: " << *ref << '\n';
+    EXPECT_EQ(*ref, g_testval);
+  }
+};
+
+TEST(mpi_broadcast_test, BroadcastFrontend) { // NOLINT
+  int nranks;
+  MPI_Comm_size(MPI_COMM_WORLD, &nranks);
+  
+  auto dc = allocate_context(MPI_COMM_WORLD);
+  
+  auto val = dc->make_async_ref< int >();
+  auto phase = dc->make_phase(nranks);
+  
+  int rank;
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+  
+  for (auto &&idx : phase.mapping())
+    std::cout << "rank " << rank << " mapping: " << idx.rank <<'\n';
+  
+  auto c = dc->make_collection<int>(nranks);
+  
+  auto newval = dc->create_work<init_broadcast_val>(std::move(val), g_testval);
+  
+  std::tie(c) = dc->phase_broadcast< int >(phase, 0, std::move(std::get<0>(newval)));
+  std::cout << rank << ": cval: " << *c->getElement(rank) << '\n';
+  
+  dc->create_phase_work< test_broadcasted >(phase, std::move(c));
+  
+  dc->flush();
+}

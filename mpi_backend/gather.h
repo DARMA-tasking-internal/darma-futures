@@ -13,6 +13,7 @@ namespace darma_backend {
                     int root, MPI_Comm comm = MPI_COMM_WORLD);
   }
   
+  // TODO: order elements by index
   /**
    * Perform a gather operation. This operation gathers all elements of a collection
    * and yields a vector containing those elements, ordered by rank.
@@ -25,8 +26,8 @@ namespace darma_backend {
    * @return                    A vector containing all the elements in the collection in rank order.
    */
   template<typename T, typename IndexType>
-  async_ref<std::vector<T>, None, Modify>
-  gather(async_collection<T, IndexType> &&collection, int root,
+  async_ref_base<std::vector<T>>
+  gather(async_ref_base<collection<T, IndexType>> &&collection, int root,
          MPI_Comm comm = MPI_COMM_WORLD) {
     auto &outcoll = *collection;
     
@@ -59,7 +60,7 @@ namespace darma_backend {
       }
     }
     
-    return async_ref<std::vector<T>, None, Modify>(std::move(retvec));
+    return async_ref_base<std::vector<T>>::make(std::move(retvec));
   }
 }
 
