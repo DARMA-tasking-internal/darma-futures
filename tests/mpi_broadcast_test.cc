@@ -38,9 +38,9 @@ TEST(mpi_broadcast_test, BroadcastAsyncRef) { // NOLINT
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   
-  async_ref<int, None, Modify> ref;
+  auto ref = async_ref<int, ReadOnly, None>::empty();
   if (rank == 0) { 
-    ref = async_ref<int, None, Modify>{value};
+    ref = async_ref<int, ReadOnly, None>::make(value);
   }
   
   auto ret = darma_backend::broadcast< int >(std::move(ref), 0);
