@@ -135,6 +135,19 @@ struct Frontend : public Backend {
     return std::make_tuple(std::move(red_ret), std::move(coll_ret));
   }
   
+  /**
+   * Perform a gather operation with the current phase on the specified collection.
+   * This operation will collect all items in the collection coll onto the rank specified
+   * by root.
+   * 
+   * @tparam Phase  The type of phase (deduced)
+   * @tparam Idx    The index type used in the collection (deduced)
+   * @tparam T      The type stored in the collection (deduced)
+   * @param ph      The phase object of type Phase
+   * @param root    The root rank used for the gather operation
+   * @param coll    The collection to gather
+   * @return        A tuple containing a vector of all elements in the collection, in rank order
+   */
   template <class Phase, class Idx, class T>
   auto phase_gather(Phase& ph, int root, async_ref<collection<T, Idx>, None, Modify>&& coll) {
     
@@ -145,6 +158,19 @@ struct Frontend : public Backend {
     return std::make_tuple(async_ref<std::vector<T>, None, Modify>::make(std::move(registered)));
   }
   
+  /**
+   * Perform a broadcast operation from the root onto all ranks in a phase.
+   * THe operation returns a collection that distributes a copy of the broadcast
+   * element to all ranks in phase ph.
+   * 
+   * @tparam Idx    The index type of the returned collection
+   * @tparam Phase  The type of phase (deduced)
+   * @tparam T      The type of element to broadcast
+   * @param ph      The phase of type Phase over which to broadcast
+   * @param root    The rank that will broadcast ref to all other ranks
+   * @param ref     The async_ref to the element to broadcast. For all ranks not root, this parameter is ignored.
+   * @return        The resulting collection with a copy of the broadcasted element on each rank.
+   */
   template <class Idx, class Phase, class T>
   auto phase_broadcast(Phase& ph, int root, async_ref<T, None, Modify>&& ref) {
     
