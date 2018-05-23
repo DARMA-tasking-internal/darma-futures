@@ -13,49 +13,62 @@ namespace darma_backend
   using serializer = darma::serialization::SimpleSerializationHandler<>;
   using serialization_buffer = darma::serialization::DynamicSerializationBuffer<std::allocator<char>>;
   
-  template< typename T, typename ScheduledPermissions >
-  serializer::serialization_buffer_t
-  get_sendbuff( const async_ref< T, ReadOnly, ScheduledPermissions > &_ref )
-  {
-    return serializer::serialize( *_ref );
-  }
-  
   template<typename T>
   struct type_to_mpi;
 
   template<>
   struct type_to_mpi<int> {
-    static constexpr auto datatype = MPI_INT;
+    static auto datatype()
+    {
+      return MPI_INT;
+    }
   };
 
   template<>
   struct type_to_mpi<long> {
-    static constexpr auto datatype = MPI_LONG;
+    static auto datatype()
+    {
+      return MPI_LONG;
+    }
   };
 
   template<>
   struct type_to_mpi<long long> {
-    static constexpr auto datatype = MPI_LONG_LONG;
+    static auto datatype()
+    {
+      return MPI_LONG_LONG;
+    }
   };
   template<>
   struct type_to_mpi<unsigned> {
-    static constexpr auto datatype = MPI_UNSIGNED;
+    static auto datatype()
+    {
+      return MPI_UNSIGNED;
+    }
   };
 
   template<>
   struct type_to_mpi<unsigned long> {
-    static constexpr auto datatype = MPI_UNSIGNED_LONG;
+    static auto datatype()
+    {
+      return MPI_UNSIGNED_LONG;
+    }
   };
 
   template<>
   struct type_to_mpi<unsigned long long> {
-    static constexpr auto datatype = MPI_UNSIGNED_LONG_LONG;
+    static auto datatype()
+    {
+      return MPI_UNSIGNED_LONG_LONG;
+    }
   };
+  
+  // TODO: rest of conversions
   
   template< typename T >
   constexpr auto get_mpi_type( T )
   {
-    return type_to_mpi<T>::datatype;
+    return type_to_mpi<T>::datatype();
   }
 }
 
