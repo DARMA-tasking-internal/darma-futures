@@ -324,6 +324,11 @@ struct MpiBackend {
 
   void* allocate_temp_buffer(int size);
   void free_temp_buffer(void* buf, int size);
+  
+  void flush()
+  {
+    clear_tasks();
+  }
 
  private:
   void inform_listener(int idx);

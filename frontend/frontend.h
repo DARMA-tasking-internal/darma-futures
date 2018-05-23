@@ -238,6 +238,11 @@ struct Frontend : public Backend {
 
     return out;
   }
+  
+  void flush()
+  {
+    Backend::flush();
+  }
 
 };
 
