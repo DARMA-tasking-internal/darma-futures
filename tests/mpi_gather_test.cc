@@ -39,7 +39,7 @@ TEST(mpi_gather_test, GatherAsyncRef) { // NOLINT
   MPI_Comm_size(MPI_COMM_WORLD, &nranks);
   
   int start, end;
-  std::tie(start, end) = range_for_rank(rank, nranks, 0, static_cast<int>(element_vector.size()));
+  std::tie(start, end) = detail::range_for_rank(rank, nranks, 0, static_cast<int>(element_vector.size()));
   
   for (int i = start; i < end; ++i)
     coll.setElement(i, &element_vector[i]);
