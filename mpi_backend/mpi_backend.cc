@@ -230,19 +230,21 @@ MpiBackend::send_data(mpi_async_ref& ref, int collId,
 
 void
 MpiBackend::make_rank_mapping(int nEntriesGlobal, std::vector<IndexInfo>& mapping, std::vector<int>& local)
-{
-  if (nEntriesGlobal % size_){
-    error("do not yet support collections that do not evenly divide ranks");
-  }
-  //do a prefix sum or something in future versions
-  int entriesPer = nEntriesGlobal / size_;
-  mapping.resize(nEntriesGlobal);
-  for (int i=0; i < nEntriesGlobal; ++i){
-    int rank = i / entriesPer;
-    mapping[i].rank = rank;
-    mapping[i].rankUniqueId = i % entriesPer;
-    if (rank == rank_){
-      local.push_back(i);
+{  
+  mapping.resize(static_cast<size_t>(nEntriesGlobal));
+  for (int rank = 0; rank < size_; ++rank) {
+    auto range = detail::range_for_rank(rank, size_, 0, nEntriesGlobal);
+    
+    int unique_id = 0;
+    for (int i = range.first; i < range.second; ++i) {
+      mapping[i].rank = rank;
+      mapping[i].rankUniqueId = unique_id++;
+    }
+    
+    if (rank == rank_) {
+      local.reserve(local.size() + static_cast<size_t>(range.second - range.first));
+      for (int i = range.first; i < range.second; ++i)
+        local.push_back(i);
     }
   }
 }
