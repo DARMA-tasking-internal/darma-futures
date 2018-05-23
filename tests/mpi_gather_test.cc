@@ -81,11 +81,6 @@ struct check_vecs
                   async_ref< std::vector<int>, Modify, Modify > ref)
   {
     const auto &vec = *ref;
-    std::cout << "vec: ";
-    for (auto &&v : vec ) {
-      std::cout << v << " ";
-    }
-    std::cout << std::endl;
     EXPECT_TRUE(std::equal(g_element_vector.begin(), g_element_vector.end(),
                            vec.begin(), vec.end()));
   }

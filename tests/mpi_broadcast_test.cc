@@ -67,7 +67,6 @@ struct test_broadcasted
   {
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    std::cout << "test_broadcast rank " << rank << " val: " << *ref << '\n';
     EXPECT_EQ(*ref, g_testval);
   }
 };
@@ -84,15 +83,11 @@ TEST(mpi_broadcast_test, BroadcastFrontend) { // NOLINT
   int rank;
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   
-  for (auto &&idx : phase.mapping())
-    std::cout << "rank " << rank << " mapping: " << idx.rank <<'\n';
-  
   auto c = dc->make_collection<int>(nranks);
   
   auto newval = dc->create_work<init_broadcast_val>(std::move(val), g_testval);
   
   std::tie(c) = dc->phase_broadcast< int >(phase, 0, std::move(std::get<0>(newval)));
-  std::cout << rank << ": cval: " << *c->getElement(rank) << '\n';
   
   dc->create_phase_work< test_broadcasted >(phase, std::move(c));
   
