@@ -18,6 +18,8 @@ set (DarmaConcept_VERSION_MINOR 1)
 #include (CheckCXXCompilerFlag)
 #include (CheckCXXSourceCompiles)
 
+enable_testing()
+
 add_subdirectory(frontend)
 add_subdirectory(mpi_backend)
 add_subdirectory(examples)

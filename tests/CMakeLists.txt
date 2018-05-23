@@ -1,7 +1,6 @@
 find_package(GTest)
 
-if (GTEST_FOUND)
-
+if (GTEST_FOUND)  
   include(GoogleTest)
 
   add_executable(darma_mpi_backend_tests
