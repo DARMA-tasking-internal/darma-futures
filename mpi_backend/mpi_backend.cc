@@ -2,6 +2,7 @@
 #include "mpi_index_entry.h"
 #include <cstdlib>
 #include <iostream>
+#include <cstdarg>
 
 MpiBackend::MpiBackend(MPI_Comm comm) :
   comm_(comm),
@@ -234,7 +235,7 @@ MpiBackend::make_rank_mapping(int nEntriesGlobal, std::vector<IndexInfo>& mappin
     error("do not yet support collections that do not evenly divide ranks");
   }
   //do a prefix sum or something in future versions
-  int entriesPer = nEntriesGlobal;
+  int entriesPer = nEntriesGlobal / size_;
   mapping.resize(nEntriesGlobal);
   for (int i=0; i < nEntriesGlobal; ++i){
     int rank = i / entriesPer;
