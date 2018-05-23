@@ -18,6 +18,17 @@ struct LocalIndex {
 
 namespace detail
 {
+  /**
+   * Returns the beginning and end of an element-to-rank assignment in an array.
+   * 
+   * @tparam IndexType  The index type (deduced)
+   * @param rank        The rank to get the index range for
+   * @param nranks      The total number of ranks
+   * @param begin       The beginning index of the array (e.g. 0)
+   * @param end         The ending index of the array (e.g. the array size)
+   * @return            A pair where first is the beginning of the range for rank and second is
+   *                    the end of the range.
+   */
   template<typename IndexType>
   std::pair<IndexType, IndexType>
   range_for_rank(int rank, int nranks, IndexType begin, IndexType end)
