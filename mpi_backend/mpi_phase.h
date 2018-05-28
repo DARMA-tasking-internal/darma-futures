@@ -68,5 +68,22 @@ struct Phase {
  std::shared_ptr<PhaseData> data_;
 };
 
+template <class Idx>
+struct Window {
+  Window(){}
+
+  void setId(int id){
+    id_ = id;
+  }
+
+  int id() const {
+    return id_;
+  }
+
+ private:
+  int id_;
+};
+
+
 #endif
 

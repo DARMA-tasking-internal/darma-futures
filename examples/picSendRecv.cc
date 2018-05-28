@@ -70,7 +70,7 @@ struct DarmaSwarm {
     }
 
     template <class Archive>
-    static void unpack(Swarm& p, Archive& ar){
+    static void unpack(Context* ctx, Swarm& p, Archive& ar){
       int remote;
       int local;
       std::vector<double> values;
