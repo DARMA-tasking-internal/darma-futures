@@ -31,6 +31,10 @@ struct mpi_async_ref {
     terminateID_ = termID;
   }
 
+  int terminateId() const {
+    return terminateID_;
+  }
+
  protected:
   enum empty_tag { Empty };
 

@@ -32,9 +32,65 @@ struct collection_base {
   int id_;
 };
 
+template <class T, class Idx> struct collection;
+
+template <class T, class Idx>
+struct mpi_collection {
+
+  mpi_collection(int size) : referenced_(nullptr), size_(size) {}
+
+  mpi_collection(mpi_collection&&) = default;
+
+  collection<T,Idx>* referenced() const {
+    return referenced_;
+  }
+
+  const Idx& size() const {
+    return size_;
+  }
+
+  const auto& localElements() const {
+    return local_elements_;
+  }
+
+  T& getLocal(const Idx& idx){
+    auto iter = local_elements_.find(idx);
+    if (iter == local_elements_.end()){
+      abort();
+    }
+    return *(iter->second);
+  }
+
+  template <class... Args>
+  T& emplaceLocal(const Idx& idx, Args&&... args){
+    T* elem = new T(std::forward<Args>(args)...);
+    local_elements_[idx] = elem;
+    return *elem;
+  }
+
+ private:
+  std::map<int, T*> local_elements_;
+  collection<T,Idx>* referenced_;
+  int size_;
+
+};
+
+template <class T, class Idx>
+using mpi_collection_ptr = std::unique_ptr<mpi_collection<T,Idx>>;
+
 template <class T, class Idx>
 struct collection : public collection_base {
-  collection(int size) : size_(size),  initialized_(false) {}
+  collection(int size) :
+    size_(size),
+    initialized_(false)
+  {}
+
+  collection(int size, const std::map<int,T*>& elements) :
+    initialized_(true),
+    size_(size),
+    local_elements_(elements)
+  {
+  }
 
   T* getElement(int idx){
     auto iter = local_elements_.find(idx);
@@ -53,11 +109,23 @@ struct collection : public collection_base {
     return index_mapping_[index].rank;
   }
 
+  void assignMpi(mpi_collection_ptr<T,Idx>&& coll){
+    mpi_parent_ = std::move(coll);
+  }
+
+  bool hasMpiParent() const {
+    return bool(mpi_parent_);
+  }
+
+  auto&& moveMpiParent(){
+    return std::move(mpi_parent_);
+  }
+
   bool initialized() const {
     return initialized_;
   }
 
-  void setInitializ() {
+  void setInitialized() {
     initialized_ = true;
   }
 
@@ -73,24 +141,11 @@ struct collection : public collection_base {
   std::map<int, T*> local_elements_;
   int size_;
   bool initialized_;
+  std::unique_ptr<mpi_collection<T,Idx>> mpi_parent_;
 
 };
 
 
-template <class T, class Idx>
-struct mpi_collection {
 
-  mpi_collection(int size) : coll_(size) {}
-
-  mpi_collection(collection<T,Idx>&& coll) : coll_(std::move(coll)) {}
-
-  collection<T,Idx>& getCollection(){
-    return coll_;
-  }
-
- private:
-  collection<T,Idx> coll_;
-
-};
 #endif
 
