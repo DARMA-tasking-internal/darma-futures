@@ -46,18 +46,20 @@ struct Frontend : public Backend {
     auto op = Backend::template make_recv_op<Accessor>(std::move(input), 
       std::forward<LocalIndex>(local), std::forward<RemoteIndex>(remote),
       std::forward<Args>(args)...);
-    Backend::sequence(op, op.getArgument(), ret);
+    //Backend::sequence(op, op.getArgument(), ret);
     Backend::register_recv_op(std::move(op));
     return ret;
   }
 
-  template <class Accessor, class Task, class Index,
-            class T, class Imm, class Sched>
-  auto put_task(Index&& idx, async_ref<T,Imm,Sched>&& input){
+  template <class Accessor, class Index,
+            class T, class Imm, class Sched,
+            class... Args>
+  auto put_task(Index&& idx, async_ref<T,Imm,Sched>&& input, Args&&... args){
     auto ret = async_ref<T,typename min_permissions<Idempotent,Imm>::type_t,Sched>::clone(&input);
-    //auto op = Backend::template make_active_send_op<Accessor,Task>(std::move(input), std::forward<Index>(idx));
-    //Backend::sequence(op, op.getArgument(), ret);
-    //Backend::register_active_send_op(std::move(op));
+    auto op = Backend::template make_active_send_op<Accessor,T,Index,Args...>
+        (std::move(input), std::forward<Index>(idx), std::forward<Args>(args)...);
+    //Backend::sequenceActiveSend(op, op.getArgument(), ret);
+    Backend::register_active_send_op(std::move(op));
     return ret;
   }
 
@@ -128,7 +130,7 @@ struct Frontend : public Backend {
   auto phase_reduce(Phase& ph, async_ref<collection<T,Idx>,None,Modify>&& coll){
     async_ref<collection<T,Idx>,None,Modify> coll_ret(std::move(coll));
 
-    //Backend::sequence(coll, coll_ret);
+    //Backend::sequence(Collective, coll, coll_ret);
 
     //some sort of registration
     auto red_ret = Backend::template register_phase_reduce<Functor>(ph, std::move(coll), coll_ret);
@@ -136,15 +138,33 @@ struct Frontend : public Backend {
         (std::move(red_ret), std::move(coll_ret));
   }
 
-  template <class T, class Idx>
-  auto darma_collection(mpi_collection<T,Idx>& coll){
-    return async_ref<collection<T,Idx>,None,Modify>::empty();
-  }
-
   template <class BeTask>
   void register_dependencies(BeTask* be_task){
     using be_task_t = std::remove_reference_t<decltype(*be_task)>;
     tuple_register<BeTask::nArgs,0,be_task_t>()(this,be_task);
+  }
+
+  template <class Lambda, class... Args>
+  auto create_work_inline(Lambda&& lambda, Args&&... args){
+    auto out = output_tuple_selector<mod_return_type_selector,sizeof...(Args),
+                                     std::remove_reference_t<Args>...>()(args...);
+
+    using fe_task_t = typename task_type_selector<
+        FrontendLambdaTask, Context, Lambda,
+        sizeof...(Args),
+        std::remove_reference_t<Args>...>::type_t;
+
+    fe_task_t fe_task(std::move(lambda), std::forward<Args>(args)...);
+    tuple_sequencer<sizeof...(Args),0,0,fe_task_t,decltype(out)>()(this,fe_task,out);
+
+    //allocate functions return pointers
+    auto* be_task = Backend::allocate_task(std::move(fe_task));
+
+    register_dependencies(be_task);
+
+    Backend::register_task(be_task);
+
+    return out;
   }
 
   template <class Functor, class... Args>
@@ -198,7 +218,12 @@ struct Frontend : public Backend {
   };
 
   template <class Functor, class Phase, class... Args>
-  auto create_phase_work(Phase& ph, Args&&... args){
+  auto create_phase_window(Phase&& ph, Args&&... args){
+    return create_phase_work<Functor>(std::forward<Phase>(ph), std::forward<Args>(args)...);
+  }
+
+  template <class Functor, class Phase, class... Args>
+  auto create_phase_work(Phase&& ph, Args&&... args){
     auto out = output_tuple_selector<mod_return_type_selector,sizeof...(Args),
                                      std::remove_reference_t<Args>...>()(args...);
 

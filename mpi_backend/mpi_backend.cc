@@ -3,6 +3,9 @@
 #include <cstdlib>
 #include <iostream>
 
+int MpiBackend::taskIdCtr_ = 1;
+std::vector<RecvOpGeneratorBase<MpiBackend::Context>*> MpiBackend::generators_;
+
 MpiBackend::MpiBackend(MPI_Comm comm) :
   comm_(comm),
   collIdCtr_(0),
@@ -12,14 +15,16 @@ MpiBackend::MpiBackend(MPI_Comm comm) :
   MPI_Comm_size(comm, &size_);
 
   requests_.reserve(1024);
+  statuses_.reserve(1024);
   indices_.resize(1024);
 }
 
 struct TagMaker {
   unsigned int frontPadding : 1,
-    collId : 10,
-    dstId : 10,
-    srcId : 10,
+    collId : 8,
+    dstId : 9,
+    srcId : 9,
+    taskId : 4,
     backPadding : 1;
 };
 
@@ -27,13 +32,14 @@ template <int T>
 struct print_size;
 
 int
-MpiBackend::makeUniqueTag(int collId, int dstId, int srcId){
+MpiBackend::makeUniqueTag(int collId, int dstId, int srcId, int taskId){
   //this is dirty - but don't hate
   TagMaker tag;
   tag.frontPadding = 0;
   tag.collId = collId;
   tag.dstId = dstId;
   tag.srcId = srcId;
+  tag.taskId = taskId; //zero means no task
   tag.backPadding = 0;
   static_assert(sizeof(TagMaker) <= sizeof(int), "tag is small enough");
   return *reinterpret_cast<int*>(&tag);
@@ -45,13 +51,23 @@ MpiBackend::create_pending_recvs()
   for (int i=0; i < numPendingProbes_; ++i){
     MPI_Status stat;
     MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, comm_, &stat);
-    auto& rankMap = pendingRecvs_[stat.MPI_SOURCE];
-    auto iter = rankMap.find(stat.MPI_TAG);
-    if (iter == rankMap.end()){
-      error("unabled to find tag %d", stat.MPI_TAG);
+
+    //this might be an incoming task - or it might just be a message
+    PendingRecvBase* recv;
+    TagMaker* tagger = (TagMaker*) &stat.MPI_TAG;
+    if (tagger->taskId != 0){
+      //this delivered a task to me
+      RecvOpGeneratorBase<Context>* gen = generators_[tagger->taskId];
+      recv = gen->generate(frontendPtr(), tagger->dstId, tagger->collId);
+    } else {
+      auto& rankMap = pendingRecvs_[stat.MPI_SOURCE];
+      auto iter = rankMap.find(stat.MPI_TAG);
+      if (iter == rankMap.end()){
+        error("unabled to find tag %d", stat.MPI_TAG);
+      }
+      recv = iter->second;
+      rankMap.erase(iter);
     }
-    PendingRecvBase* recv = iter->second;
-    rankMap.erase(iter);
 
     int size; MPI_Get_count(&stat, MPI_BYTE, &size);
     void* data = allocate_temp_buffer(size);
@@ -83,6 +99,7 @@ MpiBackend::allocate_request()
   int ret = requests_.size();
   requests_.emplace_back();
   listeners_.emplace_back();
+  statuses_.emplace_back();
   return ret;
 }
 
@@ -125,7 +142,7 @@ MpiBackend::progress_dependencies()
   create_pending_recvs();
   int nComplete;
   MPI_Testsome(requests_.size(), requests_.data(), &nComplete,
-               indices_.data(), MPI_STATUSES_IGNORE);
+               indices_.data(), statuses_.data());
   //start from the end for backfilling
   for (int i=nComplete-1; i >= 0; i--){
     int idxDone = indices_[i];
@@ -218,13 +235,43 @@ MpiBackend::clear_tasks()
 void
 MpiBackend::send_data(mpi_async_ref& ref, int collId,
                       const IndexInfo& src, const IndexInfo& dst,
-                      void* data, int size)
+                      void* data, int size, int taskId)
 {
-  int tag = makeUniqueTag(collId, dst.rankUniqueId, src.rankUniqueId);
+  int tag = makeUniqueTag(collId, dst.rankUniqueId, src.rankUniqueId, taskId);
   int request = allocate_request();
   ref.addRequest(request);
   MPI_Request* reqPtr = &requests_[request];
   MPI_Isend(data, size, MPI_BYTE, dst.rank, tag, comm_, reqPtr);
+}
+
+void
+MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int>& local, std::vector<IndexInfo>& mapping)
+{
+  std::cout << "making global mapping of total size " << total_size << std::endl;
+  for (int i : local) std::cout << i << std::endl;
+  //okay, this is not the way I want to have to do this
+  int myNumLocal = local.size();
+  int maxNumLocal;
+  MPI_Allreduce(&myNumLocal, &maxNumLocal, 1, MPI_INT, MPI_MAX, comm_);
+  std::vector<int> allIndices(maxNumLocal*size_);
+  std::vector<int> indices(maxNumLocal, -1);
+  for (int i=0; i < local.size(); ++i){
+    indices[i] = local[i];
+  }
+  MPI_Allgather(indices.data(), maxNumLocal, MPI_INT, allIndices.data(), maxNumLocal, MPI_INT, comm_);
+  mapping.resize(total_size);
+  int globalIndex = 0;
+  for (int i=0; i < size_; ++i){
+    int* currentBlock = &allIndices[i*maxNumLocal];
+    for (int localIndex=0; localIndex < maxNumLocal && currentBlock[localIndex] != -1;
+          ++localIndex, ++globalIndex){
+      std::cout << "set global index " << globalIndex << " to " << i << std::endl;
+      mapping[globalIndex].rank = i;
+      mapping[globalIndex].rankUniqueId = localIndex;
+      ++globalIndex;
+      ++localIndex;
+    }
+  }
 }
 
 void
@@ -234,7 +281,7 @@ MpiBackend::make_rank_mapping(int nEntriesGlobal, std::vector<IndexInfo>& mappin
     error("do not yet support collections that do not evenly divide ranks");
   }
   //do a prefix sum or something in future versions
-  int entriesPer = nEntriesGlobal;
+  int entriesPer = nEntriesGlobal / size_;
   mapping.resize(nEntriesGlobal);
   for (int i=0; i < nEntriesGlobal; ++i){
     int rank = i / entriesPer;
@@ -249,6 +296,15 @@ MpiBackend::make_rank_mapping(int nEntriesGlobal, std::vector<IndexInfo>& mappin
 void
 PendingRecvBase::clear()
 {
-  int* i = (int*) data_;
-  be_->free_temp_buffer(data_, size_);
+
 }
+
+void
+PendingRecvBase::configure(MpiBackend* be, int size, void* data)
+{
+  be_ = static_cast<Frontend<MpiBackend>*>(be);
+  size_ = size;
+  data_ = data;
+}
+
+

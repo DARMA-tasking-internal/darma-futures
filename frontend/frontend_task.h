@@ -17,13 +17,13 @@ class FrontendTaskBase {
   static constexpr int nArgs = sizeof...(Args);
 
   template<typename Function, size_t ... I>
-  auto call(Function f, Context* ctx, std::index_sequence<I ...>)
+  auto call(Function&& f, Context* ctx, std::index_sequence<I ...>)
   {
     return f(ctx, std::move(std::get<I>(args_))...);
   }
 
   template<typename Function, typename Arg, size_t ... I>
-  auto callWithArg(Function f, Context* ctx, Arg& arg, std::index_sequence<I ...>)
+  auto callWithArg(Function&& f, Context* ctx, Arg& arg, std::index_sequence<I ...>)
   {
     return f(ctx, arg, std::get<I>(args_) ...);
   }
@@ -47,6 +47,25 @@ struct FrontendTask : public FrontendTaskBase<Context,Functor,Args...> {
     static constexpr auto size = sizeof...(Args);
     return Parent::call(Functor(), ctx, std::make_index_sequence<size>{});
   }
+};
+
+template <class Context, class Lambda, class... Args>
+struct FrontendLambdaTask : public FrontendTaskBase<Context,Lambda,Args...> {
+  using Parent=FrontendTaskBase<Context,Lambda,Args...>;
+
+  template <class... InArgs>
+  FrontendLambdaTask(Lambda&& lambda, InArgs&&... args) :
+    lambda_(std::move(lambda)),
+    Parent(std::forward<InArgs>(args)...)
+  {
+  }
+
+  auto run(Context* ctx) {
+    static constexpr auto size = sizeof...(Args);
+    return Parent::call(std::move(lambda_), ctx, std::make_index_sequence<size>{});
+  }
+
+  Lambda lambda_;
 };
 
 template <class Functor, class Context, class... Args>

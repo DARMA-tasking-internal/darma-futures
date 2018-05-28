@@ -3,9 +3,19 @@
 
 using Context=Frontend<MpiBackend>;
 
+//struct Particle {};
+using Particle=int;
+
+
 struct Swarm {
+  friend struct DarmaSwarm;
  public:
-  void move(){}
+  void move(bool local, std::vector<Particle>& parts){}
+
+  void moveLocal(){
+    move(true, parts_);
+  }
+
   void solveFields(){}
 
   const std::vector<int>& boundaries() const {
@@ -13,24 +23,49 @@ struct Swarm {
   }
 
  private:
+  std::vector<Particle> parts_;
+  std::vector<std::vector<Particle>> migrants_;
   std::vector<int> boundaries_;
 };
 
 struct DarmaSwarm {
- struct Migrate { };
+ struct Migrate {
+   template <class Archive>
+   static void pack(Swarm& p, Archive& ar, int nbr){
+     ar | p.migrants_[nbr];
+   }
+
+   template <class Archive>
+   static void compute_size(Swarm& p, Archive& ar, int nbr){
+     pack(p,ar,nbr);
+   }
+
+   static auto sendMigrants(Context* ctx, async_ref_ii<Swarm> swarm){
+     auto& bounds = swarm->boundaries();
+     for (int b=0; b < bounds.size(); ++b){
+       swarm = ctx->put_task<DarmaSwarm::Migrate>(bounds[b],std::move(swarm),b);
+     }
+     return std::make_tuple(std::move(swarm));
+   }
+
+   template <class Archive>
+   static void unpack(Context* ctx, async_ref_ii<Swarm> swarm, Archive& ar){
+     std::vector<Particle> incoming;
+     ar | incoming;
+     swarm->move(false, incoming);
+     sendMigrants(ctx, std::move(swarm));
+   }
+
+ };
 
  struct MpiOut { };
 
  struct MpiIn { };
 
  struct Move {
-  template <class Accessor>
-  auto operator()(Context* ctx, async_ref_ii<Swarm> swarm){
-    swarm->move();
-    for (auto& bnd : swarm->boundaries()){
-      swarm = ctx->put_task<DarmaSwarm::Migrate,Move>(bnd,std::move(swarm));
-    }
-    return std::make_tuple(std::move(swarm));
+  auto operator()(Context* ctx, int index, async_ref_ii<Swarm> swarm){
+    swarm->moveLocal();
+    return Migrate::sendMigrants(ctx, std::move(swarm));
   }
  };
 };
@@ -45,8 +80,13 @@ int main(int argc, char** argv)
   int darma_size = size*od_factor;
 
   auto dc = allocate_context(MPI_COMM_WORLD);
-  auto ph = dc->make_phase(darma_size);
-  auto mpi_swarm = dc->make_local_collection<Swarm>(ph);
+  auto mpi_swarm = dc->make_local_collection<Swarm>(darma_size);
+
+  for (int i=0; i < od_factor; ++i){
+    mpi_swarm->emplaceLocal(rank*od_factor + i);
+  }
+
+  auto ph = dc->make_phase(mpi_swarm);
 
   int niter = 10;
   for (int i=0; i < niter; ++i){
@@ -56,10 +96,9 @@ int main(int argc, char** argv)
     // Swarm& patch = pair.second;
     // overdecompose(rank,mainPatch,idx,patch);
     //}
-    auto part_coll = dc->darma_collection(mpi_swarm);
-    std::tie(part_coll) = dc->to_mpi<DarmaSwarm::MpiIn>(std::move(mpi_swarm));
-    std::tie(part_coll) = dc->create_phase_idempotent_work<DarmaSwarm::Move>(ph,std::move(part_coll));
-    std::tie(mpi_swarm) = dc->from_mpi<DarmaSwarm::MpiOut>(std::move(part_coll));
+    auto part_coll = dc->from_mpi<DarmaSwarm::MpiIn>(std::move(mpi_swarm));
+    std::tie(part_coll) = dc->create_phase_window<DarmaSwarm::Move>(ph, std::move(part_coll));
+    mpi_swarm = dc->to_mpi<DarmaSwarm::MpiOut>(std::move(part_coll));
     //un-overdecompose
     //for (auto& pair : coll){
     // int idx = pair.first;
@@ -71,5 +110,6 @@ int main(int argc, char** argv)
   MPI_Finalize();
 }
 
-
+//register the task with the runtime system
+static auto move_task = recv_task_id<DarmaSwarm::Migrate,Swarm,int>();
 
