@@ -1,0 +1,9 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(darma_frontend REQUIRED HINTS ${CMAKE_CURRENT_LIST_DIR}/../frontend)
+find_dependency(MPI REQUIRED)
+find_dependency(DarmaSerialization REQUIRED HINTS @DarmaSerialization_DIR@)
+
+include("${CMAKE_CURRENT_LIST_DIR}/darmaTargets.cmake")
