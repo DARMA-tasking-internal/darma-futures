@@ -129,13 +129,13 @@ struct MpiBackend {
   //todo - make this a set of variadic args
   //todo - have the frontend do most of the work for this
   template <class Accessor, class T, class Index>
-  auto to_mpi(mpi_collection<T,Index>&& coll){
+  auto from_mpi(mpi_collection<T,Index>&& coll){
     //no load balancing yet, so this does nothing
     return std::make_tuple(async_ref<collection<T,Index>,None,Modify>::make(coll.getCollection()));
   }
 
   template <class Accessor, class T, class Index>
-  auto from_mpi(async_ref_base<collection<T,Index>>&& arg){
+  auto to_mpi(async_ref_base<collection<T,Index>>&& arg){
     //this is a fully blocking call
     clear_tasks();
     return std::make_tuple(mpi_collection<T,Index>(std::move(*arg)));

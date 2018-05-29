@@ -92,9 +92,9 @@ int main(int argc, char** argv)
     // overdecompose(rank,mainPatch,idx,patch);
     //}
     auto part_coll = dc->darma_collection(mpi_swarm);
-    std::tie(part_coll) = dc->to_mpi<DarmaSwarm::MpiIn>(std::move(mpi_swarm));
+    std::tie(part_coll) = dc->from_mpi<DarmaSwarm::MpiIn>(std::move(mpi_swarm));
     std::tie(part_coll) = dc->create_phase_window<DarmaSwarm::Move>(ph, std::move(part_coll));
-    std::tie(mpi_swarm) = dc->from_mpi<DarmaSwarm::MpiOut>(std::move(part_coll));
+    std::tie(mpi_swarm) = dc->to_mpi<DarmaSwarm::MpiOut>(std::move(part_coll));
     //un-overdecompose
     //for (auto& pair : coll){
     // int idx = pair.first;

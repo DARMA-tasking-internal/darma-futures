@@ -94,11 +94,11 @@ struct DarmaSwarm {
     if (iter == 0) *nmoved = swarm->initialMove();
     else *nmoved = swarm->move();
 
-    auto swarm_sent = ctx->to_recv(std::move(swarm));
+    auto swarm_sent = ctx->to_send(std::move(swarm));
     for (auto& bnd : swarm->boundaries()){
       swarm_sent = ctx->send<MigrateAccessor>(index,bnd,std::move(swarm_sent));
     }
-    auto swarm_recvd = ctx->to_send(std::move(swarm_sent));
+    auto swarm_recvd = ctx->to_recv(std::move(swarm_sent));
     for (auto& bnd : swarm->boundaries()){
       swarm_recvd = ctx->recv<MigrateAccessor>(index,bnd,std::move(swarm_recvd));
     }
@@ -202,10 +202,10 @@ int main(int argc, char** argv)
     //}
 
     auto part_coll = dc->darma_collection(mpi_swarm);
-    std::tie(part_coll) = dc->to_mpi<DarmaSwarm::MpiIn>(std::move(mpi_swarm));
+    std::tie(part_coll) = dc->from_mpi<DarmaSwarm::MpiIn>(std::move(mpi_swarm));
     std::tie(part_coll,nmoved_coll) = 
       dc->create_work<CollectiveMove>(phase,i,0,std::move(part_coll),std::move(nmoved_coll));
-    std::tie(mpi_swarm) = dc->from_mpi<DarmaSwarm::MpiOut>(std::move(part_coll));
+    std::tie(mpi_swarm) = dc->to_mpi<DarmaSwarm::MpiOut>(std::move(part_coll));
 
     //un-overdecompose
     //for (auto& pair : mpi_swarm){

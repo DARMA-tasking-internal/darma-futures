@@ -19,7 +19,7 @@ set(headers
 
 install(TARGETS darma_frontend EXPORT darma_frontend)
 install(EXPORT darma_frontend DESTINATION cmake)
-install (FILES ${headers} DESTINATION include)
+install(FILES ${headers} DESTINATION include)
 
 configure_file(
   ${CMAKE_SOURCE_DIR}/cmake/darma_frontendConfig.cmake.in
