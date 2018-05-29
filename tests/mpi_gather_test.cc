@@ -105,3 +105,46 @@ TEST(mpi_gather_test, GatherFrontend)
   
   dc->flush();
 }
+
+
+const std::vector<std::vector<int>> g_elements = {{5,3}, {21, 4, 9}, {3}, {7, 10, 54},
+                                                {11, 22, 33}, {2, 4, 8, 16}, {1, 1, 2, 3, 5},
+                                                {20, 10, 5}};
+
+struct init_elements
+{
+  void operator()(Frontend<MpiBackend> *ctx, int index,
+                  async_ref< std::vector<int>, Modify, Modify > ref)
+  {
+    *ref = g_elements[index];
+  }
+};
+
+struct check_elements
+{
+  void operator()(Frontend<MpiBackend> *ctx,
+                  async_ref<std::vector<std::vector<int>>, Modify, Modify > ref)
+  {
+    const auto &vec = *ref;
+    EXPECT_TRUE(std::equal(g_elements.begin(), g_elements.end(),
+                           vec.begin(), vec.end()));
+  }
+};
+
+TEST(mpi_gather_test, GatherFrontendComplexSerialization)
+{
+  auto dc = allocate_context(MPI_COMM_WORLD);
+  
+  auto c = dc->make_collection<std::vector<int>>(static_cast<int>(g_elements.size()));
+  auto phase = dc->make_phase(static_cast<int>(g_elements.size()));
+  
+  std::tie(c) = dc->create_phase_work<init_elements>(phase, std::move(c));
+  auto vec = dc->phase_gather(phase, 0, std::move(c));
+  
+  if ( dc->is_root() ) {
+    dc->create_work<check_elements>(std::move(std::get<0>(vec)));
+  }
+  
+  dc->flush();
+  
+}

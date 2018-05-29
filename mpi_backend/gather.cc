@@ -37,7 +37,7 @@ namespace darma_backend {
           total_size += sizes[i];
         }
       }
-  
+      
       serialization_buffer recvbuff(static_cast< std::size_t >(total_size));
       MPI_Gatherv(buff.data(), static_cast< int >( buff.capacity()), MPI_BYTE,
                   recvbuff.data(),

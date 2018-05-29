@@ -31,7 +31,12 @@ namespace darma_backend {
          MPI_Comm comm = MPI_COMM_WORLD) {
     auto &outcoll = *collection;
     
-    auto sar = serializer::make_packing_archive(sizeof(std::size_t) + outcoll.local_elements_.size() * sizeof(T));
+    auto size_archive = serializer::make_sizing_archive();
+    size_archive % outcoll.local_elements_.size();
+    for (auto &&kv : outcoll.local_elements_)
+      size_archive % *kv.second;
+    
+    auto sar = serializer::make_packing_archive(serializer::get_size(size_archive));
     sar << outcoll.local_elements_.size();
     for (auto &&kv : outcoll.local_elements_)
       sar << *kv.second;
