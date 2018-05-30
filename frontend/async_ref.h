@@ -27,6 +27,11 @@ struct async_ref : public async_ref_base<T> {
     return ret;
   }
 
+  static async_ref<T,Imm,Sched> make(T* ptr){
+    async_ref<T,Imm,Sched> ret(fwd_ptr_construct, ptr);
+    return ret;
+  }
+
   static async_ref<T,Imm,Sched> empty(){
     return async_ref<T,Imm,Sched>{Empty};
   }
@@ -40,6 +45,10 @@ struct async_ref : public async_ref_base<T> {
   explicit async_ref<T,Imm,Sched>(empty_tag tag) : async_ref_base<T>(tag){}
 
   explicit async_ref(async_ref_base<T>* old) : async_ref_base<T>(old) {}
+
+  explicit async_ref(fwd_ptr_construct_t, T* ptr) :
+    async_ref_base<T>(fwd_ptr_construct, ptr)
+  {}
 
   template <class... Args>
   explicit async_ref(in_place_construct_t, Args&&... args) :
