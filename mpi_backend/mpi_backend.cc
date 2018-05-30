@@ -245,6 +245,33 @@ MpiBackend::send_data(mpi_async_ref& ref, int collId,
 }
 
 void
+MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int>& local, std::vector<IndexInfo>& mapping)
+{
+  //okay, this is not the way I want to have to do this
+  int myNumLocal = local.size();
+  int maxNumLocal;
+  MPI_Allreduce(&myNumLocal, &maxNumLocal, 1, MPI_INT, MPI_MAX, comm_);
+  std::vector<int> allIndices(maxNumLocal*size_);
+  std::vector<int> indices(maxNumLocal, -1);
+  for (int i=0; i < local.size(); ++i){
+    indices[i] = local[i];
+  }
+  MPI_Allgather(indices.data(), maxNumLocal, MPI_INT, allIndices.data(), maxNumLocal, MPI_INT, comm_);
+  mapping.resize(total_size);
+  int globalIndex = 0;
+  for (int i=0; i < size_; ++i){
+    int* currentBlock = &allIndices[i*maxNumLocal];
+    int localIndex = 0;
+    while (currentBlock[localIndex] != -1){
+      mapping[i].rank = i;
+      mapping[i].rankUniqueId = localIndex;
+      ++globalIndex;
+      ++localIndex;
+    }
+  }
+}
+
+void
 MpiBackend::make_rank_mapping(int nEntriesGlobal, std::vector<IndexInfo>& mapping, std::vector<int>& local)
 {
   if (nEntriesGlobal % size_){

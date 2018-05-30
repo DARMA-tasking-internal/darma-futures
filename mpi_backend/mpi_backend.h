@@ -54,6 +54,18 @@ struct MpiBackend {
     return ret;
   }
 
+  template <class T, class Idx>
+  auto make_phase(mpi_collection_ptr<T,Idx>& coll){
+    Phase<Idx> ret(coll->size());
+    std::vector<int> local;
+    for (auto& pair : coll->localElements()){
+      local.push_back(pair.first);
+      ret->local_.emplace_back(pair.first);
+    }
+    make_global_mapping_from_local(coll->size(), local, ret->index_to_rank_mapping_);
+    return Phase<Idx>(coll->size());
+  }
+
   template <class Idx>
   auto make_phase(Idx idx){
     Phase<Idx> ret(idx);
@@ -129,16 +141,29 @@ struct MpiBackend {
   //todo - make this a set of variadic args
   //todo - have the frontend do most of the work for this
   template <class Accessor, class T, class Index>
-  auto from_mpi(mpi_collection<T,Index>&& coll){
+  auto from_mpi(mpi_collection_ptr<T,Index>&& mpi_coll){
     //no load balancing yet, so this does nothing
-    return std::make_tuple(async_ref<collection<T,Index>,None,Modify>::make(coll.getCollection()));
+    if (mpi_coll->referenced()){
+      collection<T,Index>* darma_coll = mpi_coll->referenced();
+      //this was remapped from a previous collection
+      darma_coll->assignMpi(std::move(mpi_coll));
+      return async_ref<collection<T,Index>,None,Modify>::make(darma_coll);
+    } else {
+      //no collection ever existed, so better make it now
+      auto ref = async_ref<collection<T,Index>,None,Modify>::make(mpi_coll->size(), mpi_coll->localElements());
+      ref->assignMpi(std::move(mpi_coll));
+      return ref;
+    }
   }
 
   template <class Accessor, class T, class Index>
   auto to_mpi(async_ref_base<collection<T,Index>>&& arg){
     //this is a fully blocking call
     clear_tasks();
-    return std::make_tuple(mpi_collection<T,Index>(std::move(*arg)));
+    if (!arg->hasMpiParent())
+      error("darma collection cannot return an MPI collection if no MPI collection was originally moved in");
+
+    return arg->moveMpiParent();
   }
 
   // Note: if you want to allocate the buffer using a custom allocator, make it
@@ -322,12 +347,8 @@ struct MpiBackend {
   }
 
   template <class T, class Index>
-  auto make_local_collection(Phase<Index>& p){
-    mpi_collection<T,Index> coll(p->size_);    
-    for (auto& local : p->local_){
-      coll.getCollection().setElement(local.index, new T);
-    }
-    return coll;
+  auto make_local_collection(Index size){
+    return std::make_unique<mpi_collection<T,Index>>(size);
   }
 
   template <class T>
@@ -388,6 +409,8 @@ struct MpiBackend {
   void clear_dependencies();
   void clear_tasks();
   void clear_queues();
+  void make_global_mapping_from_local(int total_size, const std::vector<int>& local,
+                                      std::vector<IndexInfo>& mapping);
   void make_rank_mapping(int total_size, std::vector<IndexInfo>& mapping, std::vector<int>& local);
   int allocate_request();
   void create_pending_recvs();

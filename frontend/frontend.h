@@ -138,11 +138,6 @@ struct Frontend : public Backend {
         (std::move(red_ret), std::move(coll_ret));
   }
 
-  template <class T, class Idx>
-  auto darma_collection(mpi_collection<T,Idx>& coll){
-    return async_ref<collection<T,Idx>,None,Modify>::empty();
-  }
-
   template <class BeTask>
   void register_dependencies(BeTask* be_task){
     using be_task_t = std::remove_reference_t<decltype(*be_task)>;

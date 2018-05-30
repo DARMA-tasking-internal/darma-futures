@@ -49,7 +49,7 @@ struct Phase {
 
  Phase(){}
 
- Phase(Idx& size) : 
+ Phase(const Idx& size) :
   data_(std::make_shared<PhaseData>(size))
  {}
 

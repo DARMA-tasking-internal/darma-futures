@@ -184,14 +184,19 @@ int main(int argc, char** argv)
   int darma_size = size*od_factor;
 
   auto dc = allocate_context(MPI_COMM_WORLD);
-  auto phase = dc->make_phase(darma_size);
 
   auto nmoved_coll = dc->make_collection<int>(darma_size);
 
   //this object IS valid to be accessed now
-  auto mpi_swarm = dc->make_local_collection<Swarm>(phase);
+  auto mpi_swarm = dc->make_local_collection<Swarm>(darma_size);
+
+  for (int i=0; i < od_factor; ++i){
+    mpi_swarm->emplaceLocal(rank*od_factor + i);
+  }
+
+  auto phase = dc->make_phase(mpi_swarm);
+
   //need an mpi init function here
-  
   int niter = 10;
   for (int i=0; i < niter; ++i){
     //overdecompose
@@ -201,11 +206,10 @@ int main(int argc, char** argv)
     //  //overdecompose(rank,mainPatch,idx,patch);
     //}
 
-    auto part_coll = dc->darma_collection(mpi_swarm);
-    std::tie(part_coll) = dc->from_mpi<DarmaSwarm::MpiIn>(std::move(mpi_swarm));
+    auto part_coll = dc->from_mpi<DarmaSwarm::MpiIn>(std::move(mpi_swarm));
     std::tie(part_coll,nmoved_coll) = 
       dc->create_work<CollectiveMove>(phase,i,0,std::move(part_coll),std::move(nmoved_coll));
-    std::tie(mpi_swarm) = dc->to_mpi<DarmaSwarm::MpiOut>(std::move(part_coll));
+    mpi_swarm = dc->to_mpi<DarmaSwarm::MpiOut>(std::move(part_coll));
 
     //un-overdecompose
     //for (auto& pair : mpi_swarm){
