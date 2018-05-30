@@ -16,6 +16,7 @@ struct SendOp {
 
 template <class T>
 struct RecvOp {
+/**
   RecvOp(async_ref_base<T>&& ref) : toRecv_(std::move(ref)){}
 
   async_ref_base<T>& getArgument(){
@@ -23,6 +24,7 @@ struct RecvOp {
   }
 
   async_ref_base<T> toRecv_;
+*/
 };
 
 template <class T, class Idx, class Accessor>

@@ -68,7 +68,7 @@ struct DarmaPatch {
     }
 
     template <class Archive>
-    static void unpack(Patch& p, Archive& ar, int localNbr){
+    static void unpack(Context* ctx, Patch& p, Archive& ar, int localNbr){
       int myGlobalIdx;
       int remoteGlobalIdx;
       std::vector<double> values;

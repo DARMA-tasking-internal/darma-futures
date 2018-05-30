@@ -31,6 +31,10 @@ struct mpi_async_ref {
     terminateID_ = termID;
   }
 
+  int terminateId() const {
+    return terminateID_;
+  }
+
  protected:
   enum empty_tag { Empty };
 
@@ -43,6 +47,9 @@ template <class T, class Imm, class Sched> class async_ref;
 
 struct in_place_construct_t { };
 static constexpr in_place_construct_t in_place_construct = { };
+
+struct fwd_ptr_construct_t { };
+static constexpr fwd_ptr_construct_t fwd_ptr_construct = { };
 
 template <class T>
 struct async_ref_base : public mpi_async_ref {
@@ -110,6 +117,9 @@ struct async_ref_base : public mpi_async_ref {
     parent_(old->parent_),
     t_(old->t_)
   {
+  }
+
+  explicit async_ref_base(fwd_ptr_construct_t, T* ptr) : t_(ptr), parent_(nullptr) {
   }
 
   template <class... Args>
