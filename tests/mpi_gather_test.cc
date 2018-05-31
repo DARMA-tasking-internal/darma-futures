@@ -44,7 +44,7 @@ TEST(mpi_gather_test, GatherAsyncRef) { // NOLINT
   for (int i = start; i < end; ++i)
     coll.setElement(i, &element_vector[i]);
   
-  auto ref = async_ref<collection<int, int>, ReadOnly, None>::make(coll);
+  auto ref = async_ref<collection<int, int>, ReadOnly, None>::make(&coll);
   
   auto retref = darma_backend::gather(std::move(ref), 0);
   

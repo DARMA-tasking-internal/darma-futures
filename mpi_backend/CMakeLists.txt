@@ -6,7 +6,7 @@ add_library(darma::darma ALIAS darma)
 
 target_include_directories(darma PUBLIC
   $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/mpi_backend>
-  $<INSTALL_INTERFACE:include>
+  $<INSTALL_INTERFACE:include/darma_backend>
 )
 
 find_package(DarmaSerialization REQUIRED)
@@ -33,7 +33,9 @@ export(TARGETS darma
         NAMESPACE darma::
         FILE darmaTargets.cmake)
 
-install(DIRECTORY mpi_backend DESTINATION include/darma_backend FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY . DESTINATION include/darma_backend
+        FILES_MATCHING
+            PATTERN "*.h")
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(cmake/darmaConfig.cmake.in

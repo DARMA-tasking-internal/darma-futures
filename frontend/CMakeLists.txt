@@ -4,7 +4,7 @@ add_Library(darma::darma_frontend ALIAS darma_frontend)
 
 target_include_directories(darma_frontend INTERFACE
   $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/frontend>
-  $<INSTALL_INTERFACE:include>
+  $<INSTALL_INTERFACE:include/darma>
 )
 
 target_compile_features(darma_frontend INTERFACE cxx_std_14)
@@ -33,7 +33,7 @@ export(TARGETS darma_frontend
        NAMESPACE darma::
        FILE darma_frontendTargets.cmake)
 
-install(DIRECTORY frontend DESTINATION include/darma FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY . DESTINATION include/darma FILES_MATCHING PATTERN "*.h")
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(cmake/darma_frontendConfig.cmake.in
@@ -45,8 +45,8 @@ write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/darma_frontendConfi
 
 install(
   FILES 
-        {CMAKE_CURRENT_BINARY_DIR}/darma_frontendConfig.cmake
-        {CMAKE_CURRENT_BINARY_DIR}/darma_frontendConfigVersion.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/darma_frontendConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/darma_frontendConfigVersion.cmake
   DESTINATION cmake 
 )
 
