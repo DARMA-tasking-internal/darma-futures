@@ -133,8 +133,25 @@ struct collection : public collection_base {
     index_mapping_ = ph.mapping();
   }
 
+  T* emplaceNew(const Idx& idx){
+    T* t = new T;
+    local_elements_[idx] = t;
+    return t;
+  }
+
   const IndexInfo& getIndexInfo(int index){
     return index_mapping_[index];
+  }
+
+  const std::map<int,T*> localElement() const {
+    return local_elements_;
+  }
+
+  void remove(const Idx& idx){
+    auto iter = local_elements_.find(idx);
+    T* t = iter->second;
+    delete t;
+    local_elements_.erase(iter);
   }
 
   std::vector<IndexInfo> index_mapping_;

@@ -303,6 +303,94 @@ struct MpiBackend {
     return op;
   }
 
+  template <class Accessor, class Index, class T>
+  auto rebalance(Phase<Index>& ph, async_collection<T,Index>&& coll){
+    std::vector<MPI_Request> sendDataReqs;
+    std::vector<MPI_Request> sendInfoReqs;
+    std::vector<MPI_Request> recvInfoReqs;
+    std::vector<MPI_Request> recvDataReqs;
+
+    std::vector<int> sendInfos;
+    std::vector<Index> toDel;
+
+    int rebalance_info_tag = 444;
+    int rebalance_data_tag = 445;
+    int currentInfoReq = 0;
+    int currentDataReq = 0;
+    for (auto& pair : coll->localElements()){
+      int index = pair.first;
+      int newLoc = ph->getRank(index);
+      if (newLoc != rank_){
+        //I have to send data
+        T* elem = pair.second;
+        async_ref_base<T> toRecv = async_ref_base<T>::make(elem);
+        auto buffer = make_packed_buffer<Accessor>(non_local_handler_t{}, toRecv);
+        sendInfos.emplace_back();
+        sendInfos.emplace_back();
+        int* info = &sendInfos[2*currentInfoReq];
+        info[0] = buffer.capacity();
+        info[1] = index;
+        sendInfoReqs.emplace_back();
+        send_data(newLoc, info, sizeof(int)*2, rebalance_info_tag, &sendInfoReqs[currentInfoReq++]);
+        sendDataReqs.emplace_back();
+        send_data(newLoc, buffer.data(), buffer.capacity(), rebalance_data_tag, &sendDataReqs[currentDataReq++]);
+
+        toDel.emplace_back(index);
+      }
+    }
+
+    MPI_Waitall(sendInfoReqs.size(), sendInfoReqs.data(), MPI_STATUSES_IGNORE);
+
+    std::vector<int> recvInfos;
+    std::vector<int> sources;
+    //add validation pass ensure the incoming data is what we expect
+    for (auto& pair : coll->localElements()){
+      int index = pair.first;
+      int newLoc = ph->getRank(index);
+      if (newLoc != rank_){
+        recvInfoReqs.emplace_back();
+        recvInfos.emplace_back();
+        recvInfos.emplace_back();
+        int* info = &recvInfos[2*currentInfoReq];
+        recv_data(newLoc, info, sizeof(int)*2, rebalance_info_tag, &recvInfoReqs[currentInfoReq++]);
+        sources.push_back(newLoc);
+      }
+    }
+
+    MPI_Waitall(recvInfoReqs.size(), recvInfoReqs.data(), MPI_STATUSES_IGNORE);
+
+    std::vector<void*> recvBufs(recvInfoReqs.size());
+    recvDataReqs.resize(recvInfoReqs.size());
+    for (int i=0; i < recvInfoReqs.size(); ++i){
+      int* info = &recvInfos[2*i];
+      int index = info[1];
+      int size = info[0];
+      void* buf = allocate_temp_buffer(size);
+      recvBufs.push_back(buf);
+      recv_data(sources[i], buf, size, rebalance_data_tag, &recvDataReqs[i]);
+    }
+
+    MPI_Waitall(recvDataReqs.size(), recvDataReqs.data(), MPI_STATUSES_IGNORE);
+
+    for (auto& idx : toDel){
+      coll->remove(idx);
+    }
+
+    for (int i=0; i < recvDataReqs.size(); ++i){
+      int* info = &recvInfos[2*i];
+      int index = info[1];
+      int size = info[0];
+      void* buf = recvBufs[i];
+      non_local_handler_t handler{};
+      T* newT = coll->emplaceNew(index);
+      auto u_ar = handler.make_unpacking_archive(
+        darma::serialization::NonOwningSerializationBuffer(buf, size));
+      Accessor::unpack(*newT, u_ar);
+      free_temp_buffer(buf, size);
+    }
+
+  }
+
   template <class SendOp>
   auto register_send_op(SendOp&& op){
     //already done
@@ -458,6 +546,9 @@ struct MpiBackend {
   void send_data(mpi_async_ref& in, int collId,
                  const IndexInfo& src, const IndexInfo& dst,
                  void* data, int size, int taskId = 0 /*zero means no task*/);
+
+  void send_data(int dest, void* data, int size, int tag, MPI_Request* req);
+  void recv_data(int src, void* data, int size, int tag, MPI_Request* req);
 
   template <class Index>
   void local_init_phase(Phase<Index>& ph){

@@ -433,8 +433,20 @@ MpiBackend::send_data(mpi_async_ref& ref, int collId,
   int tag = makeUniqueTag(collId, dst.rankUniqueId, src.rankUniqueId, taskId);
   int request = allocate_request();
   ref.addRequest(request);
-  MPI_Request* reqPtr = &requests_[request];
-  MPI_Isend(data, size, MPI_BYTE, dst.rank, tag, comm_, reqPtr);
+  send_data(dst.rank, data, size, tag, &requests_[request]);
+
+}
+
+void
+MpiBackend::send_data(int dest, void *data, int size, int tag, MPI_Request *req)
+{
+  MPI_Isend(data, size, MPI_BYTE, dest, tag, comm_, req);
+}
+
+void
+MpiBackend::recv_data(int src, void *data, int size, int tag, MPI_Request *req)
+{
+  MPI_Irecv(data, size, MPI_BYTE, src, tag, comm_, req);
 }
 
 void

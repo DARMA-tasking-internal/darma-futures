@@ -68,6 +68,14 @@ struct PhaseData {
   return local_.end();
  }
 
+ int getRank(int idx) const {
+  return index_to_rank_mapping_[idx].rank;
+ }
+
+ const std::vector<LocalIndex>& local() const {
+   return local_;
+ }
+
  const std::vector<IndexInfo>& mapping() const {
    return index_to_rank_mapping_;
  }
