@@ -6,7 +6,7 @@
 #include "mpi_index_entry.h"
 
 struct PerformanceCounter {
-  std::vector<uint64_t> counters;
+  uint64_t counter; //just one for now
 };
 
 struct LocalIndex {

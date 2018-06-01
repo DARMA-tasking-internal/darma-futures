@@ -102,8 +102,6 @@ struct DarmaSwarm {
     for (auto& bnd : swarm->boundaries()){
       swarm_recvd = ctx->recv<MigrateAccessor>(index,bnd,std::move(swarm_recvd));
     }
-
-    std::cout << "Moved " << *nmoved << " on index " << index << std::endl;
   }
  };
 

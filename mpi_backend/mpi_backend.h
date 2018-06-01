@@ -24,6 +24,13 @@ template <class Accessor, class T, class Index>
 int recv_task_id();
 
 struct MpiBackend {
+  struct PerfCtrReduce {
+    uint64_t total;
+    uint64_t max;
+    uint64_t min;
+    uint64_t maxLocalTasks;
+  };
+
   using Context=Frontend<MpiBackend>;
   using task=TaskBase<Context>;
 
@@ -106,7 +113,9 @@ struct MpiBackend {
   void run_worker(){}
 
   template <class Idx>
-  void balance(Phase<Idx>& idx){}
+  void balance(Phase<Idx>& idx){
+
+  }
 
   template <class T>
   void register_dependency(task*, T&&){
@@ -459,6 +468,20 @@ struct MpiBackend {
     }
   }
 
+  bool tradeTasks(uint64_t desiredDelta, uint64_t matchCutoff,
+                  std::vector<uint64_t>& giver, std::vector<uint64_t>& taker,
+                  int& takerIdx, int& giverIdx);
+
+  std::vector<uint64_t> balance(std::vector<uint64_t>&& localWeights,
+                      std::vector<uint64_t>&& localIndices);
+
+  void runBalancer(const std::vector<uint64_t>& localIndices,
+      const std::vector<uint64_t>& localWeights,
+      std::vector<uint64_t>& newLocalIndices,
+      std::vector<uint64_t>& newLocalWeights,
+      uint64_t localWork, uint64_t globalWork,
+      int maxNumLocalTasks);
+
  private:
   std::vector<Listener*> listeners_;
   std::vector<int> indices_;
@@ -466,7 +489,7 @@ struct MpiBackend {
   std::vector<MPI_Status> statuses_;
   std::list<task*> taskQueue_;
   std::map<int,collection_base*> collections_;
-  std::map<int,std::map<int,PendingRecvBase*>> pendingRecvs_;
+  std::map<int,std::map<int,std::list<PendingRecvBase*>>> pendingRecvs_;
   MPI_Comm comm_;
   int rank_;
   int size_;
@@ -478,6 +501,11 @@ struct MpiBackend {
   //for idempotent task regions
   int activeWindow_;
 
+  MPI_Op perfCtrOp_;
+  MPI_Datatype perfCtrType_;
+
+  MPI_Op perfCtrBalanceOp_;
+  MPI_Datatype perfCtrBalanceType_;
 
 };
 

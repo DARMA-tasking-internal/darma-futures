@@ -7,6 +7,18 @@
 int MpiBackend::taskIdCtr_ = 1;
 std::vector<RecvOpGeneratorBase<MpiBackend::Context>*> MpiBackend::generators_;
 
+static void perfCtrReduceFxn(void* a, void* b, int* len, MPI_Datatype* type)
+{
+  //length better be 1
+  MpiBackend::PerfCtrReduce* in = (MpiBackend::PerfCtrReduce*) a;
+  MpiBackend::PerfCtrReduce* inout = (MpiBackend::PerfCtrReduce*) b;
+
+  inout->max = std::max(inout->max, in->max);
+  inout->min = std::min(inout->min, in->min);
+  inout->total += in->total;
+  inout->maxLocalTasks = std::max(inout->maxLocalTasks, in->maxLocalTasks);
+}
+
 MpiBackend::MpiBackend(MPI_Comm comm) :
   comm_(comm),
   collIdCtr_(0),
@@ -18,6 +30,9 @@ MpiBackend::MpiBackend(MPI_Comm comm) :
   requests_.reserve(1024);
   statuses_.reserve(1024);
   indices_.resize(1024);
+
+  MPI_Type_vector(1, 4, 0, MPI_UINT64_T, &perfCtrType_);
+  MPI_Op_create(perfCtrReduceFxn, 1, &perfCtrOp_);
 }
 
 struct TagMaker {
@@ -46,6 +61,179 @@ MpiBackend::makeUniqueTag(int collId, int dstId, int srcId, int taskId){
   return *reinterpret_cast<int*>(&tag);
 }
 
+bool
+MpiBackend::tradeTasks(uint64_t desiredDelta, uint64_t matchCutoff,
+                       std::vector<uint64_t>& giver, std::vector<uint64_t>& taker,
+                       int& takerIdx, int& giverIdx)
+{
+  takerIdx = 0;
+  size_t takerStop = taker.size() - 1;
+  giverIdx = giver.size() - 1;
+  uint64_t takerSize = taker[takerIdx];
+  uint64_t giverSize = giver[giverIdx];
+  while (takerIdx <= takerStop && giverIdx >= 0 && takerSize < giverSize){
+    uint64_t delta = giverSize - takerSize;
+    if (desiredDelta > delta){
+      uint64_t delta_delta = desiredDelta - delta;
+      //this is the best I can do - I hope it's good enough
+      return delta_delta < matchCutoff;
+    } else {
+      uint64_t delta_delta = delta - desiredDelta;
+      if (delta_delta < matchCutoff) return true; //good enough
+
+      uint64_t takerDelta = std::numeric_limits<uint64_t>::max();
+      uint64_t giverDelta = std::numeric_limits<uint64_t>::max();
+      //increment whichever index causes the least change
+      if (takerIdx < takerStop) takerDelta = taker[takerIdx+1] - taker[takerIdx];
+      if (giverIdx > 0) giverDelta = giver[giverIdx] - giver[giverIdx-1];
+
+      //depending on which produces the smallest delta, change that index
+      if (giverDelta < takerDelta) giverIdx--;
+      else takerIdx++;
+    }
+  }
+  takerIdx = -1;
+  giverIdx = -1;
+  return false; //I did not find a good match
+}
+
+std::vector<uint64_t>
+MpiBackend::balance(std::vector<uint64_t>&& localWeights,
+                    std::vector<uint64_t>&& localIndices)
+{
+  uint64_t localWork = 0;
+  uint64_t minWork = std::numeric_limits<uint64_t>::max();
+  uint64_t maxWork = std::numeric_limits<uint64_t>::min();
+  std::vector<uint64_t> outgoingSizes(localIndices.size());
+  for (int i=0; i < localWeights.size(); ++i){
+    uint64_t weight = localWeights[i];
+    localWork += weight;
+    minWork = std::min(minWork, weight);
+    maxWork = std::max(maxWork, weight);
+    outgoingSizes[i] = weight;
+  }
+
+  static const int maxNumTries = 5;
+  static const double diffCutoff = 0.15;
+  int tryNum = 0;
+  double maxDiffFraction;
+
+  std::vector<uint64_t> oldWeights = std::move(localWeights);
+  std::vector<uint64_t> oldIndices = std::move(localIndices);
+
+
+  while(1) {
+    if (tryNum >= maxNumTries){
+      return oldIndices;
+    }
+
+    PerfCtrReduce local;
+    local.min = minWork;
+    local.max = maxWork;
+    local.total = localWork;
+    local.maxLocalTasks = localIndices.size();
+    PerfCtrReduce global;
+
+    MPI_Allreduce(&local, &global, 1, perfCtrType_, perfCtrOp_, comm_);
+    uint64_t perfBalance = global.total / size_;
+    uint64_t maxDiff = global.max - global.min;
+    maxDiffFraction = double(maxDiff) / double(perfBalance);
+    if (maxDiffFraction < diffCutoff){
+      return oldIndices;
+    }
+
+    std::vector<uint64_t> newWeights;
+    std::vector<uint64_t> newIndices;
+    runBalancer(oldIndices, oldWeights, newIndices, newWeights,
+                localWork, global.total, global.maxLocalTasks);
+
+    ++tryNum;
+
+    oldWeights = std::move(newWeights);
+    oldIndices = std::move(newIndices);
+  }
+  return oldIndices; //not really needed, but make compilers happy
+}
+
+void
+MpiBackend::runBalancer(const std::vector<uint64_t>& localIndices,
+                    const std::vector<uint64_t>& localWeights,
+                    std::vector<uint64_t>& newLocalIndices,
+                    std::vector<uint64_t>& newLocalWeights,
+                    uint64_t localWork, uint64_t globalWork,
+                    int maxNumLocalTasks)
+{
+  uint64_t perfBalance = globalWork / size_;
+
+  MPI_Comm balanceComm;
+  int color = 0;
+  MPI_Comm_split(comm_, color, localWork, &balanceComm);
+  int balanceRank;
+  MPI_Comm_rank(balanceComm, &balanceRank);
+
+  std::vector<uint64_t> incomingSizes;
+  incomingSizes.resize(maxNumLocalTasks);
+
+  int partner;
+  /* if an odd number, round up */
+  int halfSize = (size_ + 1)  / 2;
+  if (perfBalance > localWork){
+    //there less work here
+    int rankDelta = halfSize - balanceRank;
+    partner = halfSize + rankDelta;
+  } else {
+    int rankDelta = balanceRank - halfSize;
+    partner = halfSize - rankDelta;
+  }
+
+  if (partner == balanceRank){
+    MPI_Comm_free(&balanceComm);
+    //oh, this is as good as it gets
+    newLocalIndices = localIndices;
+    return;
+  }
+
+  int tag = 451;
+  MPI_Status stat;
+  MPI_Sendrecv(localWeights.data(), localWeights.size(), MPI_UINT64_T, partner, tag,
+               incomingSizes.data(), incomingSizes.size(), MPI_UINT64_T, partner, tag,
+               balanceComm, &stat);
+
+  int numIncoming;
+  MPI_Get_count(&stat, MPI_UINT64_T, &numIncoming);
+  incomingSizes.resize(numIncoming);
+
+  uint64_t partnerTotalWork = 0;
+  for (uint64_t size : incomingSizes) partnerTotalWork += size;
+
+  int numLocalTasks = localIndices.size();
+  int numPartnerTasks = numIncoming;
+
+  if (perfBalance > localWork){
+    //less work here
+    if (numLocalTasks >= numPartnerTasks){
+      //this is awkward... I have more (or same) tasks but also less work
+      //I guess try to exchange some tasks, but don't make num task mismatch worse
+    } else {
+      //I have less work and also fewer tasks
+      //take some tasks
+    }
+  } else {
+    //more work here
+    if (numPartnerTasks >= numLocalTasks){
+      //this is awkward... I have fewer (or same) tasks but also more work
+      //I guess try to exchange some tasks, but don't make num task mismatch worse
+    } else {
+      //I have more work and also more tasks
+      //give some tasks away
+    }
+  }
+
+
+  //well, I really hope that worked well
+  MPI_Comm_free(&balanceComm);
+}
+
 void
 MpiBackend::create_pending_recvs()
 {
@@ -66,8 +254,12 @@ MpiBackend::create_pending_recvs()
       if (iter == rankMap.end()){
         error("unabled to find tag %d", stat.MPI_TAG);
       }
-      recv = iter->second;
-      rankMap.erase(iter);
+      auto& list = iter->second;
+      recv = list.front();
+      list.pop_front();
+      if (list.empty()){
+        rankMap.erase(iter);
+      }
     }
 
     int size; MPI_Get_count(&stat, MPI_BYTE, &size);
@@ -86,7 +278,7 @@ MpiBackend::add_pending_recv(PendingRecvBase* pending, int collId,
 {
   int tag = makeUniqueTag(collId, local.rankUniqueId, remote.rankUniqueId);
   pending->increment_join_counter();
-  pendingRecvs_[remote.rank][tag] = pending;
+  pendingRecvs_[remote.rank][tag].push_back(pending);
   int reqId = allocate_request();
   pending->setId(reqId);
   listeners_[reqId] = pending;
@@ -248,8 +440,6 @@ MpiBackend::send_data(mpi_async_ref& ref, int collId,
 void
 MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int>& local, std::vector<IndexInfo>& mapping)
 {
-  std::cout << "making global mapping of total size " << total_size << std::endl;
-  for (int i : local) std::cout << i << std::endl;
   //okay, this is not the way I want to have to do this
   int myNumLocal = local.size();
   int maxNumLocal;
@@ -266,7 +456,6 @@ MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int
     int* currentBlock = &allIndices[i*maxNumLocal];
     for (int localIndex=0; localIndex < maxNumLocal && currentBlock[localIndex] != -1;
           ++localIndex, ++globalIndex){
-      std::cout << "set global index " << globalIndex << " to " << i << std::endl;
       mapping[globalIndex].rank = i;
       mapping[globalIndex].rankUniqueId = localIndex;
       ++globalIndex;
