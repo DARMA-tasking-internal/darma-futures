@@ -27,7 +27,12 @@ struct async_ref : public async_ref_base<T> {
     return ret;
   }
 
-  static async_ref<T,Imm,Sched> make(T* ptr){
+  static async_ref<T,Imm,Sched> make(std::shared_ptr<T>& ptr){
+    async_ref<T,Imm,Sched> ret(fwd_ptr_construct, ptr);
+    return ret;
+  }
+
+  static async_ref<T,Imm,Sched> make(const std::shared_ptr<T>& ptr){
     async_ref<T,Imm,Sched> ret(fwd_ptr_construct, ptr);
     return ret;
   }
@@ -46,8 +51,12 @@ struct async_ref : public async_ref_base<T> {
 
   explicit async_ref(async_ref_base<T>* old) : async_ref_base<T>(old) {}
 
-  explicit async_ref(fwd_ptr_construct_t, T* ptr) :
+  explicit async_ref(fwd_ptr_construct_t, const std::shared_ptr<T>& ptr) :
     async_ref_base<T>(fwd_ptr_construct, ptr)
+  {}
+
+  explicit async_ref(fwd_ptr_construct_t, std::shared_ptr<T>&& ptr) :
+    async_ref_base<T>(fwd_ptr_construct, std::move(ptr))
   {}
 
   template <class... Args>
@@ -55,13 +64,6 @@ struct async_ref : public async_ref_base<T> {
     async_ref_base<T>(in_place_construct, std::forward<Args>(args)...)
   {}
 };
-
-
-template <class T, class... Args>
-T& setup_ref(Args&&... args){
-  T* tmp = new T(std::forward<Args>(args)...);
-  return *tmp;
-}
 
 template <class T, typename... Args>
 async_ref<T,Modify,Modify> init(Args&&... args){

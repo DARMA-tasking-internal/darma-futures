@@ -19,8 +19,8 @@ struct Print {
 };
 
 struct Fib {
-  async_ref_nm<int> operator()(Context* ctx, async_ref_mm<int> res, int n){
-    if (n == 1 || n == 0) return res;
+  void operator()(Context* ctx, async_ref_mm<int> res, int n){
+    if (n == 1 || n == 0) return;
 
     auto n1 = init<int>(); 
     auto n2 = init<int>();

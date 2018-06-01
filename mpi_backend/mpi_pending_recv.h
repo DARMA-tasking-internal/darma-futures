@@ -4,13 +4,17 @@
 #include "mpi_listener.h"
 #include "frontend.h"
 #include <tuple>
+#include <memory>
 #include <darma/serialization/simple_handler.h>
 #include <darma/serialization/serializers/all.h>
 
 struct MpiBackend;
 
 struct PendingRecvBase : public Listener {
-  PendingRecvBase() : listener_(nullptr) {}
+
+  PendingRecvBase() : listener_(nullptr), id_(-1), size_(-1), data_(nullptr) {}
+
+  virtual ~PendingRecvBase(){}
 
   void configure(MpiBackend* be, int size, void* data);
 
@@ -54,6 +58,10 @@ struct PendingRecv : public PendingRecvBase {
 
   template <class Handler, class Tuple>
   void unpack(Handler&& handler, Tuple&& t) {
+    if (size_ == -1){
+      std::cerr << "Size not inited on " << this << std::endl;
+      abort();
+    }
     auto u_ar = handler.make_unpacking_archive(
       darma::serialization::NonOwningSerializationBuffer(data_, size_));
     static constexpr auto size = std::tuple_size<std::remove_reference_t<Tuple>>::value;
@@ -127,9 +135,28 @@ template <class Context, class Accessor, class T, class Index>
 struct RecvOpGenerator : public RecvOpGeneratorBase<Context> {
   PendingRecvBase* generate(Context* ctx, int localIndex, int collId){
     auto ref = ctx->template get_collection_element<T>(collId, localIndex);
-    PendingRecv<Accessor,T,Index>* recv = new NonLocalPendingRecv<Accessor,T,Index>(std::move(ref));
-    return recv;
+    return new NonLocalPendingRecv<Accessor,T,Index>(std::move(ref));
   }
+};
+
+struct PendingSendBase : public Listener {
+  virtual ~PendingSendBase(){}
+
+  bool finalize() override {
+    //this is really just to hold the serialization buffer
+    return true;
+  }
+
+};
+
+template <class Buffer>
+struct PendingSend : public PendingSendBase {
+  PendingSend(Buffer&& buf) : buf_(std::move(buf)){}
+
+  ~PendingSend(){}
+
+ private:
+  Buffer buf_;
 };
 
 #endif

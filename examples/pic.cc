@@ -58,9 +58,27 @@ struct DarmaSwarm {
 
  };
 
- struct MpiOut { };
+ struct MpiIn {
+   template <class Archive>
+   static void compute_size(Swarm& s, Archive& ar){}
 
- struct MpiIn { };
+   template <class Archive>
+   static void pack(Swarm& s, Archive& ar){}
+
+   template <class Archive>
+   static void unpack(Swarm& s, Archive& ar){}
+ };
+
+ struct MpiOut {
+   template <class Archive>
+   static void compute_size(Swarm& s, Archive& ar){}
+
+   template <class Archive>
+   static void pack(Swarm& s, Archive& ar){}
+
+   template <class Archive>
+   static void unpack(Swarm& s, Archive& ar){}
+ };
 
  struct Move {
   auto operator()(Context* ctx, int index, async_ref_ii<Swarm> swarm){
@@ -79,7 +97,7 @@ int main(int argc, char** argv)
   int size; MPI_Comm_size(MPI_COMM_WORLD, &size);
   int darma_size = size*od_factor;
 
-  auto dc = allocate_context(MPI_COMM_WORLD);
+  auto dc = allocate_context(MPI_COMM_WORLD, argc, argv);
   auto mpi_swarm = dc->make_local_collection<Swarm>(darma_size);
 
   for (int i=0; i < od_factor; ++i){
@@ -108,6 +126,7 @@ int main(int argc, char** argv)
     mainPatch.solveFields();
   }
   MPI_Finalize();
+  return 0;
 }
 
 //register the task with the runtime system

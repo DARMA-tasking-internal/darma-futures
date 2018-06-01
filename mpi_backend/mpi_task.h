@@ -12,6 +12,7 @@ struct TaskBase : public Listener {
     counters_(nullptr)
   {}
 
+  virtual ~TaskBase(){}
 
   virtual void run(Context* ctx) = 0;
 
@@ -19,8 +20,14 @@ struct TaskBase : public Listener {
     return counters_;
   }
 
+  void addCounter(uint64_t ctr){
+    if (counters_){
+      counters_->counter += ctr;
+    }
+  }
+
   void setCounters(PerformanceCounter* ctr){
-    ctr = counters_;
+    counters_ = ctr;
   }
 
  private:

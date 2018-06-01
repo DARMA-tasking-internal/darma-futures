@@ -6,7 +6,8 @@
 #include "mpi_index_entry.h"
 
 struct PerformanceCounter {
-  std::vector<uint64_t> counters;
+  uint64_t counter; //just one for now
+  PerformanceCounter() : counter(0){}
 };
 
 struct LocalIndex {
@@ -66,6 +67,14 @@ struct PhaseData {
 
  auto index_end() {
   return local_.end();
+ }
+
+ int getRank(int idx) const {
+  return index_to_rank_mapping_[idx].rank;
+ }
+
+ const std::vector<LocalIndex>& local() const {
+   return local_;
  }
 
  const std::vector<IndexInfo>& mapping() const {

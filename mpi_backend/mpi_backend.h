@@ -1,6 +1,28 @@
 #ifndef mpi_backend_h
 #define mpi_backend_h
 
+#include "darma_config.h"
+#if DARMA_DEBUG_PRINT
+#include <fmt/format.h>
+#define darmaDebug(flag, fmtstr, ...) \
+  if (DebugFlag<DebugFlags::flag>::active) \
+    std::cout << fmt::format(fmtstr, __VA_ARGS__) << std::endl
+#else
+#define darmaDebug(...)
+#endif
+
+struct DebugFlags {
+  struct LB { };
+  struct SendRecv {};
+  struct Interop {};
+  struct Task {};
+};
+
+template <class T>
+struct DebugFlag {
+  static bool active;
+};
+template <class T> bool DebugFlag<T>::active = false;
 
 #include "mpi_async_ref.h"
 #include "mpi_task.h"
@@ -19,25 +41,56 @@
 #include <list>
 #include <vector>
 #include <map>
+#include <set>
 
 template <class Accessor, class T, class Index>
 int recv_task_id();
 
+static inline uint64_t rdtsc(void)
+{
+  uint32_t hi, lo;
+  __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
+  return uint64_t( (uint64_t)lo | (uint64_t)hi<<32);
+}
+
 struct MpiBackend {
+  struct migration {
+    int index;
+    void* buf;
+    void* obj;
+    int size;
+    int rank;
+    int mpiParent;
+    migration(int i, void* b, void* o, int s, int r, int p) :
+      index(i), buf(b), obj(o), size(s), rank(r), mpiParent(p)
+    {
+    }
+  };
+
+  typedef enum {
+    RandomLB,
+    CommSplitLB,
+    ZoltanLB,
+    DebugLB
+  } lb_type_t;
+
+  struct PerfCtrReduce {
+    uint64_t total;
+    uint64_t max;
+    uint64_t min;
+    uint64_t maxLocalTasks;
+  };
+
   using Context=Frontend<MpiBackend>;
   using task=TaskBase<Context>;
 
   static constexpr uintptr_t REQUEST_CLEAR = 0x1;
 
-  MpiBackend(MPI_Comm comm);
+  MpiBackend(MPI_Comm comm, int argc, char** argv);
 
-  ~MpiBackend(){
-    clear_tasks();
-  }
+  ~MpiBackend();
 
   void error(const char* fmt, ...);
-
-  void debug(const char* fmt, ...);
 
   Context& frontend() {
     return *static_cast<Context*>(this);
@@ -106,7 +159,10 @@ struct MpiBackend {
   void run_worker(){}
 
   template <class Idx>
-  void balance(Phase<Idx>& idx){}
+  void rebalance(Phase<Idx>& ph){
+    std::vector<pair64> newConfig = balance(ph->local());
+    reset_phase(newConfig, ph->local_, ph->index_to_rank_mapping_);
+  }
 
   template <class T>
   void register_dependency(task*, T&&){
@@ -117,23 +173,23 @@ struct MpiBackend {
   void register_pred_cond_dependency(task*, T&&){}
 
   void register_pred_cond_dependency(task* t, mpi_async_ref& in){
-    register_dependency(t,in);
+    register_dependency(std::move(t),in);
   }
 
   template <class T> //no ops if not async refs
-  void register_pred_body_dependency(task*, T&&){}
+  void register_pred_body_dependency(task* t, T&&){}
 
   void register_pred_body_dependency(task* t, mpi_async_ref& in){
-    register_dependency(t,in);
+    register_dependency(std::move(t),in);
   }
 
   void register_task(task* t){
-    if (t->join_counter() == 0) taskQueue_.push_back(t);
+    if (t->join_counter() == 0) taskQueue_.push_back(std::move(t));
   }
 
   void register_predicated_task(task* t){
     //don't do anything special for predicate tasks
-    register_task(t);
+    register_task(std::move(t));
   }
 
   //template <class PackFunctor, class UnpackFunctor, class TaskFunctor,
@@ -144,19 +200,68 @@ struct MpiBackend {
   //  return op;
   //}
 
+  template <class Accessor, class T, class Index>
+  void from_mpi_shuffle(mpi_collection_ptr<T,Index>& mpi_coll, collection<T,Index>* coll){
+    async_ref_base<T>* dummy;
+    using pack_buf_t = decltype(make_packed_buffer<Accessor>(non_local_handler_t{}, *dummy));
+    std::vector<migration> toSend;
+    std::vector<migration> toRecv;
+    std::vector<pack_buf_t> packers;
+    for (auto& pair : mpi_coll->localElements()){
+      int index = pair.first;
+      int newLoc = coll->getRank(index);
+      if (newLoc != rank_){
+        darmaDebug(Interop, "Rank={} needs to send DARMA {} back to {}", rank_, index, newLoc);
+        non_local_handler_t handler{};
+        auto elem = pair.second;
+        auto s_ar = handler.make_sizing_archive();
+        Accessor::compute_size(*elem, s_ar);
+        auto p_ar = handler.make_packing_archive(std::move(s_ar));
+        Accessor::pack(*elem, p_ar);
+        auto buffer = handler.extract_buffer(std::move(p_ar));
+        toSend.emplace_back(index, buffer.data(), elem.get(), buffer.capacity(), newLoc, rank_);
+        packers.emplace_back(std::move(buffer));
+      }
+    }
+
+    for (auto& pair : coll->localElements()){
+      int index = pair.first;
+      auto elem = pair.second;
+      int oldLoc = coll->getParentMpiRank(index);
+      if (oldLoc != rank_){
+        darmaDebug(Interop, "Rank={} needs to recv DARMA {} back from {}", rank_, index, oldLoc);
+        toRecv.emplace_back(index, nullptr, elem.get(), 0, oldLoc, oldLoc);
+      }
+    }
+
+    rebalance(toSend, toRecv);
+
+    for (migration& m : toRecv){
+      non_local_handler_t handler{};
+      auto u_ar = handler.make_unpacking_archive(
+        darma::serialization::NonOwningSerializationBuffer(m.buf, m.size));
+      T* obj = (T*) m.obj;
+      Accessor::unpack(*obj, u_ar);
+      free_temp_buffer(m.buf, m.size);
+    }
+  }
+
   //todo - make this a set of variadic args
   //todo - have the frontend do most of the work for this
   template <class Accessor, class T, class Index>
   auto from_mpi(mpi_collection_ptr<T,Index>&& mpi_coll){
     //no load balancing yet, so this does nothing
-    if (mpi_coll->referenced()){
-      collection<T,Index>* darma_coll = mpi_coll->referenced();
+    if (mpi_coll->referencesDarmaCollection()){
+      auto darma_coll = mpi_coll->darmaCollection();
+      from_mpi_shuffle<Accessor,T,Index>(mpi_coll, darma_coll.get());
       //this was remapped from a previous collection
       darma_coll->assignMpi(std::move(mpi_coll));
       return async_ref<collection<T,Index>,None,Modify>::make(darma_coll);
     } else {
       //no collection ever existed, so better make it now
-      auto ref = async_ref<collection<T,Index>,None,Modify>::make(mpi_coll->size(), mpi_coll->localElements());
+      auto ref = async_ref<collection<T,Index>,None,Modify>
+            ::make(rank_, mpi_coll->size(), mpi_coll->localElements());
+      ref->setId(collIdCtr_++);
       ref->assignMpi(std::move(mpi_coll));
       return ref;
     }
@@ -169,7 +274,52 @@ struct MpiBackend {
     if (!arg->hasMpiParent())
       error("darma collection cannot return an MPI collection if no MPI collection was originally moved in");
 
-    return arg->moveMpiParent();
+    auto&& mpiParent = arg->moveMpiParent();
+    async_ref_base<T>* dummy;
+    using pack_buf_t = decltype(make_packed_buffer<Accessor>(non_local_handler_t{}, *dummy));
+    std::vector<migration> toSend;
+    std::vector<migration> toRecv;
+    std::vector<pack_buf_t> packers;
+    for (auto& pair : arg->localElements()){
+      int index = pair.first;
+      int newLoc = arg->getParentMpiRank(index);
+      if (newLoc != rank_){
+        darmaDebug(Interop, "Rank={} needs to send {} back to {}", rank_, index, newLoc);
+        non_local_handler_t handler{};
+        auto elem = pair.second;
+        auto s_ar = handler.make_sizing_archive();
+        Accessor::compute_size(*elem, s_ar);
+        auto p_ar = handler.make_packing_archive(std::move(s_ar));
+        Accessor::pack(*elem, p_ar);
+        auto buffer = handler.extract_buffer(std::move(p_ar));
+        toSend.emplace_back(index, buffer.data(), elem.get(), buffer.capacity(), newLoc, newLoc);
+        packers.emplace_back(std::move(buffer));
+      }
+    }
+
+    for (auto& pair : mpiParent->localElements()){
+      int index = pair.first;
+      auto elem = pair.second;
+      int oldLoc = arg->getRank(index);
+      if (oldLoc != rank_){
+        darmaDebug(Interop, "Rank={} needs to recv {} back from {}", rank_, index, oldLoc);
+        toRecv.emplace_back(index, nullptr, elem.get(), 0, oldLoc, rank_);
+      }
+    }
+
+    rebalance(toSend, toRecv);
+
+    for (migration& m : toRecv){
+      non_local_handler_t handler{};
+      auto u_ar = handler.make_unpacking_archive(
+        darma::serialization::NonOwningSerializationBuffer(m.buf, m.size));
+      T* obj = (T*) m.obj;
+      Accessor::unpack(*obj, u_ar);
+      free_temp_buffer(m.buf, m.size);
+    }
+
+    mpiParent->setDarmaCollection(arg.sharedPtr());
+    return std::move(mpiParent);
   }
 
   // Note: if you want to allocate the buffer using a custom allocator, make it
@@ -209,7 +359,10 @@ struct MpiBackend {
         std::forward<RemoteIndex>(remote),
         std::forward<Args>(args)...
       );
-      send_data(ref, parent->id(), src, dst, buffer.data(), buffer.capacity());
+      int reqId = send_data(ref, parent->id(), src, dst, buffer.data(), buffer.capacity());
+      auto* listener = new PendingSend<decltype(buffer)>(std::move(buffer));
+      listener->increment_join_counter();
+      listeners_[reqId] = listener;
     }
 
     //size
@@ -289,9 +442,73 @@ struct MpiBackend {
 
     using MyRecv = NonLocalPendingRecv<Accessor,T,index_t,std::remove_reference_t<Args>...>;
     auto* pending = new MyRecv(std::move(ref), std::forward<Args>(args)...);
+    pending->increment_join_counter();
     add_pending_recv(pending, parent->id(), localEntry, remoteEntry);
     RecvOp<T> op{};
     return op;
+  }
+
+  void rebalance(std::vector<migration>& objToSend,
+                 std::vector<migration>& objToRecv);
+
+  template <class Accessor, class Index, class T>
+  auto rebalance(Phase<Index>& ph, async_collection<T,Index>&& coll){
+    int numSends = 0;
+    int numRecvs = 0;
+    async_ref_base<T>* dummy;
+    using pack_buf_t = decltype(make_packed_buffer<Accessor>(non_local_handler_t{}, *dummy));
+    std::vector<migration> toSend;
+    std::vector<migration> toRecv;
+    std::vector<pack_buf_t> packers;
+    for (auto& pair : coll->localElements()){
+      int index = pair.first;
+      int newLoc = ph->getRank(index);
+      if (newLoc != rank_){
+        ++numSends;
+        non_local_handler_t handler{};
+        auto elem = pair.second;
+        auto s_ar = handler.make_sizing_archive();
+        Accessor::compute_size(*elem, s_ar);
+        auto p_ar = handler.make_packing_archive(std::move(s_ar));
+        Accessor::pack(*elem, p_ar);
+        auto buffer = handler.extract_buffer(std::move(p_ar));
+        int mpiParent = coll->getParentMpiRank(index);
+        toSend.emplace_back(index, buffer.data(), elem.get(),
+                            buffer.capacity(), newLoc, mpiParent);
+        packers.emplace_back(std::move(buffer));
+      }
+    }
+
+    for (const LocalIndex& lidx : ph->local()){
+      int oldLoc = coll->getRank(lidx.index);
+      if (oldLoc != rank_){
+        auto newT = coll->emplaceNew(lidx.index);
+        toRecv.emplace_back(lidx.index, nullptr, newT.get(), 0, oldLoc, -1);
+        ++numRecvs;
+      }
+    }
+
+    rebalance(toSend, toRecv);
+
+    for (migration& m : toRecv){
+      non_local_handler_t handler{};
+      auto u_ar = handler.make_unpacking_archive(
+        darma::serialization::NonOwningSerializationBuffer(m.buf, m.size));
+      T* obj = (T*) m.obj;
+      Accessor::unpack(*obj, u_ar);
+      free_temp_buffer(m.buf, m.size);
+      coll->addParentMpiRank(m.index, m.mpiParent);
+    }
+
+    for (migration& m : toSend){
+      coll->remove(m.index);
+      coll->removeParentMpiRank(m.index);
+    }
+
+    coll->index_mapping_ = ph->index_to_rank_mapping_;
+
+    async_collection<T,Index> ret(std::move(coll));
+    return ret;
   }
 
   template <class SendOp>
@@ -385,18 +602,18 @@ struct MpiBackend {
 
   template <class Index, class T>
   auto get_element(const Index& idx, collection<T,Index>* coll){
-    T* t = coll->getElement(idx);
+    auto t = coll->getElement(idx);
     if (t){
       async_ref_base<T> ret(coll->getElement(idx));
       ret.setParent(coll);
       return ret;
     } else if (!coll->initialized()){
       async_ref_base<T> ret = async_ref_base<T>::make();
-      coll->setElement(idx, ret.get());
+      coll->setElement(idx, ret.sharedPtr());
       ret.setParent(coll);
       return ret;
     } else {
-      error("do not yet support remote get_element from collections");
+      error("do not yet support remote get_element from collections: index %d on rank %d", idx, rank_);
       return async_ref_base<T>::make();
     }
   }
@@ -432,8 +649,20 @@ struct MpiBackend {
   }
 
  private:
+  using pair64 = std::pair<uint64_t,uint64_t>;
+  struct sortByWeight {
+    bool operator()(const pair64& lhs, const pair64& rhs) const {
+      return lhs.first < rhs.first;
+    }
+  };
+
   void inform_listener(int idx);
-  void progress_dependencies();
+
+  /**
+   * @brief progress_dependencies
+   * @return Whether there are any pending active requests (non-null)
+   */
+  bool progress_dependencies();
   void progress_tasks();
   void progress_engine();
   void clear_dependencies();
@@ -446,9 +675,16 @@ struct MpiBackend {
   void create_pending_recvs();
   void add_pending_recv(PendingRecvBase* recv, int collId,
                         const IndexInfo& local, const IndexInfo& remote);
-  void send_data(mpi_async_ref& in, int collId,
+  int send_data(mpi_async_ref& in, int collId,
                  const IndexInfo& src, const IndexInfo& dst,
                  void* data, int size, int taskId = 0 /*zero means no task*/);
+
+  void send_data(int dest, void* data, int size, int tag, MPI_Request* req);
+  void recv_data(int src, void* data, int size, int tag, MPI_Request* req);
+
+  void reset_phase(const std::vector<pair64>& config,
+                   std::vector<LocalIndex>& local,
+                   std::vector<IndexInfo>& indices);
 
   template <class Index>
   void local_init_phase(Phase<Index>& ph){
@@ -459,14 +695,91 @@ struct MpiBackend {
     }
   }
 
+  /**
+   * @brief tradeTasks Try to find two tasks to trade between ranks that have a given difference
+   * in workload size. Note, the desired delta is 1/2 the difference in total workload since
+   * once subtracts and the other adds
+   * @param desiredDelta The difference between big/small tasks wanted for exact match
+   * @param bigger  The list of task sizes on the rank with bigger workload
+   * @param smaller The list of task sizes on the rank with smaller workload
+   * @param biggerIdx The index of the task in bigger list that best satisfies desired delta
+   * @param smallerIdx The index of the task in small list that best satisfies desired delta
+   * @return The actual delta achieved
+   */
+  uint64_t tradeTasks(uint64_t desiredDelta,
+                  const std::vector<pair64>& bigger,
+                  const std::vector<pair64>& smaller,
+                  int& biggerIdx, int& smallerIdx);
+
+  /**
+   * @brief takeTasks Try to find a set of tasks to balance workload between two rans.
+   * Note, the desired delta is 1/2 the difference in total workload.
+   * @param desiredDelta The difference between big/small tasks wanted for exact match
+   * @param giver The list of task sizes on the rank with bigger workload
+   * @return The set of tasks that best matches delta
+   */
+  std::set<int> takeTasks(uint64_t desiredDelta, const std::vector<pair64>& giver);
+
+  /**
+   * @brief balance
+   * @param local
+   * @return The new local configuraiton
+   */
+  std::vector<pair64> balance(const std::vector<LocalIndex>& local);
+
+  /**
+   * @brief balance
+   * @param localConfig
+   * @return The new local configuraiton
+   */
+  std::vector<pair64> balance(std::vector<pair64>&& localConfig);
+
+  /**
+   * @brief runCommSplitBalancer
+   * @param localConfig
+   * @param newLocalConfig in-out return of new local config after moving tasks
+   * @param localWork The total amount of work currently local
+   * @param globalWork  The total amount of work globally
+   * @param maxNumLocalTasks  The max number of tasks on any given node
+   * @param allowGiveTake whether to rigorously enforce only "exchanging" tasks
+   *         or to allow giving/taking tasks that change num local
+   */
+  void runCommSplitBalancer(std::vector<pair64>&& localConfig,
+      std::vector<pair64>& newLocalConfig,
+      uint64_t localWork, uint64_t globalWork,
+      int maxNumLocalTasks, bool allowTrades, bool allowGiveTake);
+
+  /**
+   * @brief getPartner Get a partner for trading tasks
+   * @param rank Current rank in relevant communicator
+   * @return Your partner in the trade
+   */
+  int getTradingPartner(int rank) const;
+
+  std::vector<pair64> zoltanBalance(std::vector<pair64>&& localConfig);
+  std::vector<pair64> randomBalance(std::vector<pair64>&& localConfig);
+  std::vector<pair64> debugBalance(std::vector<pair64>&& localConfig);
+  std::vector<pair64> commSplitBalance(std::vector<pair64>&& localConfig);
+
  private:
+  struct PostedRecv {
+    int size;
+    void* data;
+    int id;
+    PostedRecv(int i, int s, void* d) :
+      id(i), size(s), data(d){}
+  };
+
   std::vector<Listener*> listeners_;
   std::vector<int> indices_;
   std::vector<MPI_Request> requests_;
   std::vector<MPI_Status> statuses_;
+  std::vector<int> freeRequests_;
+  std::vector<darma::serialization::DynamicSerializationBuffer<>> sendBuffers_;
   std::list<task*> taskQueue_;
   std::map<int,collection_base*> collections_;
-  std::map<int,std::map<int,PendingRecvBase*>> pendingRecvs_;
+  std::map<int,std::list<PostedRecv>> recvsQueued_;
+  std::map<int,std::map<int,std::list<PendingRecvBase*>>> pendingRecvs_;
   MPI_Comm comm_;
   int rank_;
   int size_;
@@ -478,6 +791,10 @@ struct MpiBackend {
   //for idempotent task regions
   int activeWindow_;
 
+  MPI_Op perfCtrOp_;
+  MPI_Datatype perfCtrType_;
+
+  lb_type_t lbType_;
 
 };
 
@@ -486,8 +803,8 @@ int recv_task_id(){
   return MpiBackend::register_recv_generator<Accessor,T,Index>();
 }
 
-static inline auto allocate_context(MPI_Comm comm){
-  return std::make_unique<Frontend<MpiBackend>>(comm);
+static inline auto allocate_context(MPI_Comm comm, int argc, char** argv){
+  return std::make_unique<Frontend<MpiBackend>>(comm, argc, argv);
 }
 
 #endif

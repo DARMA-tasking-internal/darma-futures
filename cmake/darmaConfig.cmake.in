@@ -1,7 +1,9 @@
 # Get compiler and flags
 get_filename_component(SELF_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
 set (darma_frontend_DIR ${SELF_DIR})
+set (fmt_DIR @fmt_DIR@})
 set (DarmaSerialization_DIR @DarmaSerialization_DIR@)
+find_package(fmt PATHS ${fmt_DIR} ${fmt_DIR}/lib/cmake)
 find_package(darma_frontend PATHS ${SELF_DIR})
 find_package(DarmaSerialization PATHS ${DarmaSerialization_DIR}/cmake)
 if (NOT DarmaSerialization_FOUND)

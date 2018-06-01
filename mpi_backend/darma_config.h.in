@@ -1,0 +1,8 @@
+#ifndef darma_mpi_backend_config_h
+#define darma_mpi_backend_config_h
+
+#define DARMA_DEBUG_PRINT @DARMA_DEBUG_PRINT_OPT@
+#define DARMA_ZOLTAN_LB @DARMA_ZOLTAN_LB_OPT@
+
+#endif
+

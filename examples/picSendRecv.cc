@@ -84,8 +84,27 @@ struct DarmaSwarm {
     }
  };
 
- struct MpiIn {};
- struct MpiOut {};
+struct MpiIn {
+  template <class Archive>
+  static void compute_size(Swarm& s, Archive& ar){}
+
+  template <class Archive>
+  static void pack(Swarm& s, Archive& ar){}
+
+  template <class Archive>
+  static void unpack(Swarm& s, Archive& ar){}
+};
+
+struct MpiOut {
+  template <class Archive>
+  static void compute_size(Swarm& s, Archive& ar){}
+
+  template <class Archive>
+  static void pack(Swarm& s, Archive& ar){}
+
+  template <class Archive>
+  static void unpack(Swarm& s, Archive& ar){}
+};
 
  struct Move {
   void operator()(Context* ctx, int index, int iter,
@@ -102,8 +121,6 @@ struct DarmaSwarm {
     for (auto& bnd : swarm->boundaries()){
       swarm_recvd = ctx->recv<MigrateAccessor>(index,bnd,std::move(swarm_recvd));
     }
-
-    std::cout << "Moved " << *nmoved << " on index " << index << std::endl;
   }
  };
 
@@ -178,7 +195,7 @@ struct CollectiveMove {
   }
 };
 
-void run()
+void run(int argc, char** argv)
 {
   Swarm mainPatch;
 
@@ -187,7 +204,7 @@ void run()
   int size; MPI_Comm_size(MPI_COMM_WORLD, &size);
   int darma_size = size*od_factor;
 
-  auto dc = allocate_context(MPI_COMM_WORLD);
+  auto dc = allocate_context(MPI_COMM_WORLD, argc, argv);
 
   auto nmoved_coll = dc->make_collection<int>(darma_size);
 
@@ -210,11 +227,13 @@ void run()
   }
 }
 
+#define sstmac_app_name pic
 int main(int argc, char** argv)
 {
   MPI_Init(&argc, &argv);
-  run();
+  run(argc, argv);
   MPI_Finalize();
+  return 0;
 }
 
 

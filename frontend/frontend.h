@@ -309,6 +309,26 @@ struct Frontend : public Backend {
 
     return out;
   }
+
+  /**
+   * @brief split_argv
+   * Find the argv entry "--" that splits app and backend parameters
+   * @param argc The number of total command line args (backend + app)
+   * @param argv The list of all command line args (backend + app)
+   * @return The index in argc where argv[index] = "--", or argc if there is none
+   */
+  int split_argv(int argc, char** argv){
+    int splitPoint = 1;
+    while (splitPoint < argc){
+      std::string entry = argv[splitPoint];
+      if (entry == "--"){
+        return splitPoint;
+      }
+      ++splitPoint;
+    }
+    //I did not find a split
+    return argc;
+  }
   
   void flush()
   {
