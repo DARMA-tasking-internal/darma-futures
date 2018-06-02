@@ -19,6 +19,7 @@
 #include <list>
 #include <vector>
 #include <map>
+#include <set>
 
 template <class Accessor, class T, class Index>
 int recv_task_id();
@@ -113,8 +114,9 @@ struct MpiBackend {
   void run_worker(){}
 
   template <class Idx>
-  void balance(Phase<Idx>& idx){
-
+  void rebalance(Phase<Idx>& ph){
+    std::vector<pair64> newConfig = balance(ph->local());
+    reset_phase(newConfig, ph->local_, ph->index_to_rank_mapping_);
   }
 
   template <class T>
@@ -389,6 +391,8 @@ struct MpiBackend {
       free_temp_buffer(buf, size);
     }
 
+    async_collection<T,Index> ret(std::move(coll));
+    return ret;
   }
 
   template <class SendOp>
@@ -529,6 +533,13 @@ struct MpiBackend {
   }
 
  private:
+  using pair64 = std::pair<uint64_t,uint64_t>;
+  struct sortByWeight {
+    bool operator()(const pair64& lhs, const pair64& rhs) const {
+      return lhs.first < rhs.first;
+    }
+  };
+
   void inform_listener(int idx);
   void progress_dependencies();
   void progress_tasks();
@@ -550,6 +561,10 @@ struct MpiBackend {
   void send_data(int dest, void* data, int size, int tag, MPI_Request* req);
   void recv_data(int src, void* data, int size, int tag, MPI_Request* req);
 
+  void reset_phase(const std::vector<pair64>& config,
+                   std::vector<LocalIndex>& local,
+                   std::vector<IndexInfo>& indices);
+
   template <class Index>
   void local_init_phase(Phase<Index>& ph){
     std::vector<int> localIndices;
@@ -559,19 +574,41 @@ struct MpiBackend {
     }
   }
 
-  bool tradeTasks(uint64_t desiredDelta, uint64_t matchCutoff,
-                  std::vector<uint64_t>& giver, std::vector<uint64_t>& taker,
-                  int& takerIdx, int& giverIdx);
+  uint64_t tradeTasks(uint64_t desiredDelta,
+                  const std::vector<pair64>& bigger,
+                  const std::vector<pair64>& smaller,
+                  int& biggerIdx, int& smallerIdx);
 
-  std::vector<uint64_t> balance(std::vector<uint64_t>&& localWeights,
-                      std::vector<uint64_t>&& localIndices);
+  std::set<int> takeTasks(uint64_t desiredDelta, const std::vector<pair64>& giver);
 
-  void runBalancer(const std::vector<uint64_t>& localIndices,
-      const std::vector<uint64_t>& localWeights,
-      std::vector<uint64_t>& newLocalIndices,
-      std::vector<uint64_t>& newLocalWeights,
+  /**
+   * @brief balance
+   * @param local
+   * @return The new local configuraiton
+   */
+  std::vector<pair64> balance(const std::vector<LocalIndex>& local);
+
+  /**
+   * @brief balance
+   * @param localConfig
+   * @return The new local configuraiton
+   */
+  std::vector<pair64> balance(std::vector<pair64>&& localConfig);
+
+  /**
+   * @brief runBalancer
+   * @param localConfig
+   * @param newLocalConfig in-out return of new local config after moving tasks
+   * @param localWork The total amount of work currently local
+   * @param globalWork  The total amount of work globally
+   * @param maxNumLocalTasks  The max number of tasks on any given node
+   * @param allowGiveTake whether to rigorously enforce only "exchanging" tasks
+   *         or to allow giving/taking tasks that change num local
+   */
+  void runBalancer(std::vector<pair64>&& localConfig,
+      std::vector<pair64>& newLocalConfig,
       uint64_t localWork, uint64_t globalWork,
-      int maxNumLocalTasks);
+      int maxNumLocalTasks, bool allowGiveTake);
 
  private:
   std::vector<Listener*> listeners_;

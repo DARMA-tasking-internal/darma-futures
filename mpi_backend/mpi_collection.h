@@ -143,7 +143,7 @@ struct collection : public collection_base {
     return index_mapping_[index];
   }
 
-  const std::map<int,T*> localElement() const {
+  const std::map<int,T*> localElements() const {
     return local_elements_;
   }
 

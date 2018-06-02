@@ -176,7 +176,7 @@ int main(int argc, char** argv)
       auto residual = dc->make_async_ref<double>();
       std::tie(residual,residuals) = dc->phase_reduce<Add<double>>(phase, std::move(residuals));
       std::tie(residual) = dc->create_work<DarmaPatch::Print>(i,std::move(residual));
-      if (i % 5 == 0) dc->balance(phase);
+      if (i % 5 == 0) dc->rebalance(phase);
     }
   } else {
     dc->run_worker();

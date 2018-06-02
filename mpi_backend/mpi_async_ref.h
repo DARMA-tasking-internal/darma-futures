@@ -66,6 +66,10 @@ struct async_ref_base : public mpi_async_ref {
   template <class Imm, class Sched>
   async_ref_base(async_ref<T,Imm,Sched>&& parent);
 
+  static async_ref_base<T> make(T* t){
+    return async_ref_base<T>(fwd_ptr_construct, t);
+  }
+
   template <class... Args>
   static async_ref_base<T> make(Args&&... args){
     return async_ref_base<T>(in_place_construct, std::forward<Args>(args)...);
