@@ -19,8 +19,14 @@ struct TaskBase : public Listener {
     return counters_;
   }
 
+  void addCounter(uint64_t ctr){
+    if (counters_){
+      counters_->counter += ctr;
+    }
+  }
+
   void setCounters(PerformanceCounter* ctr){
-    ctr = counters_;
+    counters_ = ctr;
   }
 
  private:

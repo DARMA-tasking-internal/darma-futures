@@ -24,6 +24,13 @@
 template <class Accessor, class T, class Index>
 int recv_task_id();
 
+static inline uint64_t rdtsc(void)
+{
+  uint32_t hi, lo;
+  __asm__ __volatile__ ("rdtsc" : "=a"(lo), "=d"(hi));
+  return uint64_t( (uint64_t)lo | (uint64_t)hi<<32);
+}
+
 struct MpiBackend {
   struct PerfCtrReduce {
     uint64_t total;
@@ -116,6 +123,10 @@ struct MpiBackend {
   template <class Idx>
   void rebalance(Phase<Idx>& ph){
     std::vector<pair64> newConfig = balance(ph->local());
+    for (auto& pair : newConfig){
+      std::cout << "Rank=" << rank_ << " now has index=" << pair.second
+                << std::endl;
+    }
     reset_phase(newConfig, ph->local_, ph->index_to_rank_mapping_);
   }
 
@@ -160,14 +171,16 @@ struct MpiBackend {
   template <class Accessor, class T, class Index>
   auto from_mpi(mpi_collection_ptr<T,Index>&& mpi_coll){
     //no load balancing yet, so this does nothing
-    if (mpi_coll->referenced()){
-      collection<T,Index>* darma_coll = mpi_coll->referenced();
+    if (mpi_coll->referencesDarmaCollection()){
+      collection<T,Index>* darma_coll = mpi_coll->darmaCollection();
       //this was remapped from a previous collection
       darma_coll->assignMpi(std::move(mpi_coll));
       return async_ref<collection<T,Index>,None,Modify>::make(darma_coll);
     } else {
       //no collection ever existed, so better make it now
       auto ref = async_ref<collection<T,Index>,None,Modify>::make(mpi_coll->size(), mpi_coll->localElements());
+      ref->setId(collIdCtr_++);
+      std::cout << "Making DARMA collection from MPI" << std::endl;
       ref->assignMpi(std::move(mpi_coll));
       return ref;
     }
@@ -322,7 +335,11 @@ struct MpiBackend {
     for (auto& pair : coll->localElements()){
       int index = pair.first;
       int newLoc = ph->getRank(index);
+      std::cout << "Index=" << index << " lives on " << rank_
+                << " but will live on " << newLoc << std::endl;
       if (newLoc != rank_){
+        std::cout << "Rank=" << rank_ << " has " << index
+                  << " but rank=" << newLoc << " needs it" << std::endl;
         //I have to send data
         T* elem = pair.second;
         async_ref_base<T> toRecv = async_ref_base<T>::make(elem);
@@ -346,6 +363,7 @@ struct MpiBackend {
     std::vector<int> recvInfos;
     std::vector<int> sources;
     //add validation pass ensure the incoming data is what we expect
+    currentInfoReq = 0;
     for (auto& pair : coll->localElements()){
       int index = pair.first;
       int newLoc = ph->getRank(index);
@@ -368,7 +386,11 @@ struct MpiBackend {
       int index = info[1];
       int size = info[0];
       void* buf = allocate_temp_buffer(size);
-      recvBufs.push_back(buf);
+      recvBufs[i] = buf;
+      std::cout << "Rank=" << rank_
+                << " receiving " << size << " bytes "
+                << " in buffer=" << buf
+                << " to transfer index " << index << std::endl;
       recv_data(sources[i], buf, size, rebalance_data_tag, &recvDataReqs[i]);
     }
 
@@ -385,6 +407,10 @@ struct MpiBackend {
       void* buf = recvBufs[i];
       non_local_handler_t handler{};
       T* newT = coll->emplaceNew(index);
+      std::cout << "Rank=" << rank_
+                << " unpacking " << size << " bytes "
+                << " in buffer=" << buf
+                << " to complete index " << index << std::endl;
       auto u_ar = handler.make_unpacking_archive(
         darma::serialization::NonOwningSerializationBuffer(buf, size));
       Accessor::unpack(*newT, u_ar);

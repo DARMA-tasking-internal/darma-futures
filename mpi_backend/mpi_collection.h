@@ -41,7 +41,11 @@ struct mpi_collection {
 
   mpi_collection(mpi_collection&&) = default;
 
-  collection<T,Idx>* referenced() const {
+  bool referencesDarmaCollection() const {
+    return referenced_;
+  }
+
+  collection<T,Idx>* darmaCollection() const {
     return referenced_;
   }
 

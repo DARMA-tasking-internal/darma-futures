@@ -31,8 +31,17 @@ MpiBackend::MpiBackend(MPI_Comm comm) :
   statuses_.reserve(1024);
   indices_.resize(1024);
 
-  MPI_Type_vector(1, 4, 0, MPI_UINT64_T, &perfCtrType_);
-  MPI_Op_create(perfCtrReduceFxn, 1, &perfCtrOp_);
+  int ierr = MPI_Type_vector(1, 4, 0, MPI_UINT64_T, &perfCtrType_);
+  if (ierr != MPI_SUCCESS){
+    error("Unable to create performance counter reduce type");
+  }
+  MPI_Type_commit(&perfCtrType_);
+
+  ierr = MPI_Op_create(perfCtrReduceFxn, 1, &perfCtrOp_);
+  if (ierr != MPI_SUCCESS){
+    error("Unable to create performance counter reduce op");
+  }
+
 }
 
 struct TagMaker {
@@ -149,6 +158,8 @@ MpiBackend::balance(const std::vector<LocalIndex>& local)
     const LocalIndex& lidx = local[i];
     p.first = lidx.counters.counter;
     p.second = lidx.index;
+    std::cout << "Rank=" << rank_ << " index=" << p.second
+               << " weight=" << p.first << std::endl;
   }
   return balance(std::move(localConfig));
 }
@@ -157,12 +168,14 @@ MpiBackend::balance(const std::vector<LocalIndex>& local)
 std::vector<MpiBackend::pair64>
 MpiBackend::balance(std::vector<pair64>&& localConfig)
 {
+  std::cout << "Got in local config of size " << localConfig.size() << std::endl;
   static const int maxNumTries = 5;
   static const double diffCutoff = 0.15;
   int tryNum = 0;
   double maxDiffFraction;
 
   std::vector<pair64> oldConfig = std::move(localConfig);
+  std::cout << "Now have old config of size " << oldConfig.size() << std::endl;
 
   while(1) {
     if (tryNum >= maxNumTries){
@@ -170,27 +183,32 @@ MpiBackend::balance(std::vector<pair64>&& localConfig)
     }
 
     uint64_t localWork = 0;
-    uint64_t minWork = std::numeric_limits<uint64_t>::max();
-    uint64_t maxWork = std::numeric_limits<uint64_t>::min();
-    std::vector<uint64_t> outgoingSizes(localConfig.size());
     for (int i=0; i < oldConfig.size(); ++i){
       auto& pair = oldConfig[i];
       uint64_t weight = pair.first;
       localWork += weight;
-      minWork = std::min(minWork, weight);
-      maxWork = std::max(maxWork, weight);
-      outgoingSizes[i] = weight;
+      std::cout << "Rank=" << rank_
+                << " index=" << pair.second
+                << " weight=" << pair.first
+                << std::endl;
     }
 
     PerfCtrReduce local;
-    local.min = minWork;
-    local.max = maxWork;
+    local.min = localWork;
+    local.max = localWork;
     local.total = localWork;
-    local.maxLocalTasks = localConfig.size();
+    local.maxLocalTasks = oldConfig.size();
     PerfCtrReduce global;
 
     MPI_Allreduce(&local, &global, 1, perfCtrType_, perfCtrOp_, comm_);
+
     uint64_t perfBalance = global.total / size_;
+    std::cout << "Have global=" << global.total
+              << " with maxTasks=" << global.maxLocalTasks
+              << " with minWork=" << global.min
+              << " and maxWork=" << global.max
+              << " and balanced=" << perfBalance
+              << std::endl;
     uint64_t maxDiff = global.max - global.min;
     maxDiffFraction = double(maxDiff) / double(perfBalance);
     if (maxDiffFraction < diffCutoff){
@@ -229,17 +247,46 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
   std::vector<pair64> incomingConfig;
   incomingConfig.resize(maxNumLocalTasks);
 
+  std::cout << "Rank=" << rank_
+         << " has localWork=" << localWork
+         << " compared to balanced=" << perfBalance
+         << std::endl;
+
   int partner;
   /* if an odd number, round up */
-  int halfSize = (size_ + 1)  / 2;
+
   if (perfBalance > localWork){
-    //there less work here
-    int rankDelta = halfSize - balanceRank;
-    partner = halfSize + rankDelta;
+    //there is less work here
+    if (size_%2){
+      //odd number of ranks
+      int halfSize = size_  / 2;
+      int rankDelta = halfSize - balanceRank;
+      partner = halfSize + rankDelta;
+    } else {
+      //even number of ranks
+      int halfSize = size_ / 2;
+      int rankDelta = halfSize - balanceRank;
+      partner = halfSize + (rankDelta-1);
+    }
   } else {
-    int rankDelta = balanceRank - halfSize;
-    partner = halfSize - rankDelta;
+    if (size_%2){
+      //odd number of ranks
+      int halfSize = size_  / 2;
+      int rankDelta = balanceRank - halfSize;
+      partner = halfSize - rankDelta;
+    } else {
+      //even number of ranks
+      int halfSize = size_ / 2;
+      int rankDelta =  balanceRank - halfSize + 1;
+      partner = halfSize - rankDelta;
+    }
+
   }
+
+  std::cout << "Rank " << rank_
+            << " sorted to splitRank=" << balanceRank
+            << " and partner=" << partner
+            << std::endl;
 
   if (partner == balanceRank){
     MPI_Comm_free(&balanceComm);
@@ -258,7 +305,8 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
   MPI_Get_count(&stat, MPI_UINT64_T, &numIncoming);
   //we maybe posted a recv larger than we need
   //factor of 2 for pair64
-  incomingConfig.resize(numIncoming/2);
+  numIncoming /= 2;
+  incomingConfig.resize(numIncoming);
 
 
   uint64_t partnerTotalWork = 0;
@@ -266,6 +314,12 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
 
   int numLocalTasks = localConfig.size();
   int numPartnerTasks = numIncoming;
+
+  std::cout << "Rank=" << balanceRank
+            << " has Nlocal=" << numLocalTasks
+            << " and Npartner=" << numPartnerTasks
+            << std::endl;
+
 
   if (localWork < partnerTotalWork){
     uint64_t desiredDelta = partnerTotalWork - localWork;
@@ -280,18 +334,17 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
       /*incoming is bigger tasks, local is smaller tasks */
       uint64_t closeness = tradeTasks(desiredDelta, incomingConfig, localConfig,
                                           bigTaskIdx, smallTaskIdx);
+      std::cout << "Rank=" << balanceRank
+                << " would like to trade out=" << smallTaskIdx
+                << " and in=" << bigTaskIdx
+                << std::endl;
 
-      if (closeness <= minCloseness){
-        for (auto& smallTaskPair : newLocalConfig){
-          if (smallTaskPair.second == smallTaskIdx){
-            auto& bigTaskPair = incomingConfig[bigTaskIdx];
-            //swap the small task to the big task
-            smallTaskPair.second = bigTaskPair.second;
-            smallTaskPair.first = bigTaskPair.first;
-          }
-        }
-        exchangeFailed = false; //great!
-      }
+
+      auto& bigTaskPair = incomingConfig[bigTaskIdx];
+      auto& smallTaskPair = localConfig[smallTaskIdx];
+      smallTaskPair.second = bigTaskPair.second;
+      smallTaskPair.first = bigTaskPair.first;
+      exchangeFailed = closeness <= minCloseness; //great!
     }
 
     if (exchangeFailed && allowGiveTake){
@@ -314,17 +367,16 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
       /*local is bigger task, incoming is smaller task */
       uint64_t closeness = tradeTasks(desiredDelta, localConfig, incomingConfig,
                                   bigTaskIdx, smallTaskIdx);
-      if (closeness <= minCloseness){ //great!
-        for (auto& bigTaskPair : localConfig){
-          if (bigTaskPair.second == bigTaskIdx){
-            auto& smallTaskPair = incomingConfig[smallTaskIdx];
-            //swap the big task to the small task
-            bigTaskPair.second = smallTaskPair.second;
-            bigTaskPair.first = smallTaskPair.first;
-          }
-        }
-        exchangeFailed = false;
-      }
+      std::cout << "Rank=" << balanceRank
+                << " would like to trade out=" << bigTaskIdx
+                << " and in=" << smallTaskIdx
+                << std::endl;
+
+      auto& bigTaskPair = localConfig[bigTaskIdx];
+      auto& smallTaskPair = incomingConfig[smallTaskIdx];
+      bigTaskPair.second = smallTaskPair.second;
+      bigTaskPair.first = smallTaskPair.first;
+      exchangeFailed = closeness <= minCloseness;
     }
 
     if (exchangeFailed && allowGiveTake){
@@ -475,7 +527,10 @@ MpiBackend::progress_tasks()
     task* t = taskQueue_.front();
     if (t->join_counter() == 0){
       taskQueue_.pop_front();
+      uint64_t t_start = rdtsc();
       t->run(static_cast<Context*>(this));
+      uint64_t t_stop = rdtsc();
+      t->addCounter(t_stop-t_start);
     } else {
       return;
     }
@@ -580,18 +635,29 @@ MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int
   for (int i=0; i < local.size(); ++i){
     indices[i] = local[i];
   }
+
+  for (int i : local){
+    std::cout << "Rank=" << rank_ << " now has local index=" << i << std::endl;
+  }
+
   MPI_Allgather(indices.data(), maxNumLocal, MPI_INT, allIndices.data(), maxNumLocal, MPI_INT, comm_);
   mapping.resize(total_size);
-  int globalIndex = 0;
+
+  std::vector<int> rankCounts(size_);
   for (int i=0; i < size_; ++i){
     int* currentBlock = &allIndices[i*maxNumLocal];
-    for (int localIndex=0; localIndex < maxNumLocal && currentBlock[localIndex] != -1;
-          ++localIndex, ++globalIndex){
+    for (int localIndex=0; localIndex < maxNumLocal && currentBlock[localIndex] != -1; ++localIndex){
+      int globalIndex = currentBlock[localIndex];
       mapping[globalIndex].rank = i;
-      mapping[globalIndex].rankUniqueId = localIndex;
-      ++globalIndex;
-      ++localIndex;
+      mapping[globalIndex].rankUniqueId = rankCounts[i]++;
     }
+  }
+
+  for (int i=0; i < mapping.size(); ++i){
+    IndexInfo& ii = mapping[i];
+    std::cout << "Rank=" << rank_ << " maps global index=" << i
+              << " to rank=" << ii.rank << " and localId=" << ii.rankUniqueId
+              << std::endl;
   }
 }
 

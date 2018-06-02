@@ -7,6 +7,7 @@
 
 struct PerformanceCounter {
   uint64_t counter; //just one for now
+  PerformanceCounter() : counter(0){}
 };
 
 struct LocalIndex {
