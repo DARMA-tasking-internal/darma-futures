@@ -1,4 +1,5 @@
 #include "mpi_backend.h"
+#include <sstream>
 
 using Context=Frontend<MpiBackend>;
 
@@ -10,13 +11,13 @@ static const int numPrimes = sizeof(primes) / sizeof(int);
 struct BagOfTasks {
 
   struct Compute {
-    void operator()(Context* ctx, int index, int rank, async_ref_mm<int> localSleepMs){
+    void operator()(Context* ctx, int index, int rank, int localSleepMs){
       std::cout << "Index " << index << " sleeping for " << localSleepMs
-                << " on MPI rank " << rank << std::endl;
+                << " on MPI Rank=" << rank << std::endl;
       struct timespec sleepTS;
       sleepTS.tv_sec = 0;
       //convert ms to ns
-      sleepTS.tv_nsec = *localSleepMs * 1000000;
+      sleepTS.tv_nsec = localSleepMs * 1000000;
       struct timespec remainTS;
       while (nanosleep(&sleepTS, &remainTS) == EINTR){
         sleepTS = remainTS;
@@ -83,12 +84,24 @@ int main(int argc, char** argv)
   auto coll = dc->from_mpi<BagOfTasks::Migrate>(std::move(mpi_coll));
 
   if (dc->run_root()){
-    int niter = 2;
-    for (int i=0; i < niter; ++i){
+    int niter = 4;
+    for (int i=1; i <= niter; ++i){
       std::tie(coll) = dc->create_phase_work<BagOfTasks::Compute>(phase,rank,std::move(coll));
       if (i % 1 == 0){
         dc->rebalance(phase);
         coll = dc->rebalance<BagOfTasks::Migrate>(phase,std::move(coll));
+      }
+      if (i % 1 == 0){
+        mpi_coll = dc->to_mpi<BagOfTasks::Migrate>(std::move(coll));
+        std::stringstream sstr;
+        sstr << "MPI Check: Rank " << rank << " = {";
+        for (auto& pair : mpi_coll->localElements()){
+          BagOfTasks::Compute()(nullptr, pair.first, rank, *pair.second);
+          sstr << " " << pair.first << ":" << *pair.second;
+        }
+        sstr << "}\n";
+        std::cout << sstr.str();
+        coll = dc->from_mpi<BagOfTasks::Migrate>(std::move(mpi_coll));
       }
     }
   } else {

@@ -84,8 +84,27 @@ struct DarmaSwarm {
     }
  };
 
- struct MpiIn {};
- struct MpiOut {};
+struct MpiIn {
+  template <class Archive>
+  static void compute_size(Swarm& s, Archive& ar){}
+
+  template <class Archive>
+  static void pack(Swarm& s, Archive& ar){}
+
+  template <class Archive>
+  static void unpack(Swarm& s, Archive& ar){}
+};
+
+struct MpiOut {
+  template <class Archive>
+  static void compute_size(Swarm& s, Archive& ar){}
+
+  template <class Archive>
+  static void pack(Swarm& s, Archive& ar){}
+
+  template <class Archive>
+  static void unpack(Swarm& s, Archive& ar){}
+};
 
  struct Move {
   void operator()(Context* ctx, int index, int iter,

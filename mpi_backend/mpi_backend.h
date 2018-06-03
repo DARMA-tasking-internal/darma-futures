@@ -32,6 +32,19 @@ static inline uint64_t rdtsc(void)
 }
 
 struct MpiBackend {
+  struct migration {
+    int index;
+    void* buf;
+    void* obj;
+    int size;
+    int rank;
+    int mpiParent;
+    migration(int i, void* b, void* o, int s, int r, int p) :
+      index(i), buf(b), obj(o), size(s), rank(r), mpiParent(p)
+    {
+    }
+  };
+
   struct PerfCtrReduce {
     uint64_t total;
     uint64_t max;
@@ -123,10 +136,6 @@ struct MpiBackend {
   template <class Idx>
   void rebalance(Phase<Idx>& ph){
     std::vector<pair64> newConfig = balance(ph->local());
-    for (auto& pair : newConfig){
-      std::cout << "Rank=" << rank_ << " now has index=" << pair.second
-                << std::endl;
-    }
     reset_phase(newConfig, ph->local_, ph->index_to_rank_mapping_);
   }
 
@@ -166,6 +175,54 @@ struct MpiBackend {
   //  return op;
   //}
 
+  template <class Accessor, class T, class Index>
+  void from_mpi_shuffle(mpi_collection_ptr<T,Index>& mpi_coll, collection<T,Index>* coll){
+    async_ref_base<T>* dummy;
+    using pack_buf_t = decltype(make_packed_buffer<Accessor>(non_local_handler_t{}, *dummy));
+    std::vector<migration> toSend;
+    std::vector<migration> toRecv;
+    std::vector<pack_buf_t> packers;
+    for (auto& pair : mpi_coll->localElements()){
+      int index = pair.first;
+      int newLoc = coll->getRank(index);
+      if (newLoc != rank_){
+        std::cout << "Rank=" << rank_ << " needs to send DARMA " << index
+                  << " back to " << newLoc << std::endl;
+        non_local_handler_t handler{};
+        T* elem = pair.second;
+        auto s_ar = handler.make_sizing_archive();
+        Accessor::compute_size(*elem, s_ar);
+        auto p_ar = handler.make_packing_archive(std::move(s_ar));
+        Accessor::pack(*elem, p_ar);
+        auto buffer = handler.extract_buffer(std::move(p_ar));
+        toSend.emplace_back(index, buffer.data(), elem, buffer.capacity(), newLoc, rank_);
+        packers.emplace_back(std::move(buffer));
+      }
+    }
+
+    for (auto& pair : coll->localElements()){
+      int index = pair.first;
+      T* elem = pair.second;
+      int oldLoc = coll->getParentMpiRank(index);
+      if (oldLoc != rank_){
+        std::cout << "Rank=" << rank_ << " needs to recv DARMA " << index
+                  << " back from " << oldLoc << std::endl;
+        toRecv.emplace_back(index, nullptr, elem, 0, oldLoc, oldLoc);
+      }
+    }
+
+    rebalance(toSend, toRecv);
+
+    for (migration& m : toRecv){
+      non_local_handler_t handler{};
+      auto u_ar = handler.make_unpacking_archive(
+        darma::serialization::NonOwningSerializationBuffer(m.buf, m.size));
+      T* obj = (T*) m.obj;
+      Accessor::unpack(*obj, u_ar);
+      free_temp_buffer(m.buf, m.size);
+    }
+  }
+
   //todo - make this a set of variadic args
   //todo - have the frontend do most of the work for this
   template <class Accessor, class T, class Index>
@@ -173,12 +230,14 @@ struct MpiBackend {
     //no load balancing yet, so this does nothing
     if (mpi_coll->referencesDarmaCollection()){
       collection<T,Index>* darma_coll = mpi_coll->darmaCollection();
+      from_mpi_shuffle<Accessor,T,Index>(mpi_coll, darma_coll);
       //this was remapped from a previous collection
       darma_coll->assignMpi(std::move(mpi_coll));
       return async_ref<collection<T,Index>,None,Modify>::make(darma_coll);
     } else {
       //no collection ever existed, so better make it now
-      auto ref = async_ref<collection<T,Index>,None,Modify>::make(mpi_coll->size(), mpi_coll->localElements());
+      auto ref = async_ref<collection<T,Index>,None,Modify>
+            ::make(rank_, mpi_coll->size(), mpi_coll->localElements());
       ref->setId(collIdCtr_++);
       std::cout << "Making DARMA collection from MPI" << std::endl;
       ref->assignMpi(std::move(mpi_coll));
@@ -193,7 +252,54 @@ struct MpiBackend {
     if (!arg->hasMpiParent())
       error("darma collection cannot return an MPI collection if no MPI collection was originally moved in");
 
-    return arg->moveMpiParent();
+    auto&& mpiParent = arg->moveMpiParent();
+    async_ref_base<T>* dummy;
+    using pack_buf_t = decltype(make_packed_buffer<Accessor>(non_local_handler_t{}, *dummy));
+    std::vector<migration> toSend;
+    std::vector<migration> toRecv;
+    std::vector<pack_buf_t> packers;
+    for (auto& pair : arg->localElements()){
+      int index = pair.first;
+      int newLoc = arg->getParentMpiRank(index);
+      if (newLoc != rank_){
+        std::cout << "Rank=" << rank_ << " needs to send "
+                  << index << " back to " << newLoc << std::endl;
+        non_local_handler_t handler{};
+        T* elem = pair.second;
+        auto s_ar = handler.make_sizing_archive();
+        Accessor::compute_size(*elem, s_ar);
+        auto p_ar = handler.make_packing_archive(std::move(s_ar));
+        Accessor::pack(*elem, p_ar);
+        auto buffer = handler.extract_buffer(std::move(p_ar));
+        toSend.emplace_back(index, buffer.data(), elem, buffer.capacity(), newLoc, newLoc);
+        packers.emplace_back(std::move(buffer));
+      }
+    }
+
+    for (auto& pair : mpiParent->localElements()){
+      int index = pair.first;
+      T* elem = pair.second;
+      int oldLoc = arg->getRank(index);
+      if (oldLoc != rank_){
+        std::cout << "Rank=" << rank_ << " needs to recv "
+                  << index << " back from " << oldLoc << std::endl;
+        toRecv.emplace_back(index, nullptr, elem, 0, oldLoc, rank_);
+      }
+    }
+
+    rebalance(toSend, toRecv);
+
+    for (migration& m : toRecv){
+      non_local_handler_t handler{};
+      auto u_ar = handler.make_unpacking_archive(
+        darma::serialization::NonOwningSerializationBuffer(m.buf, m.size));
+      T* obj = (T*) m.obj;
+      Accessor::unpack(*obj, u_ar);
+      free_temp_buffer(m.buf, m.size);
+    }
+
+    mpiParent->setDarmaCollection(arg.get());
+    return std::move(mpiParent);
   }
 
   // Note: if you want to allocate the buffer using a custom allocator, make it
@@ -318,123 +424,67 @@ struct MpiBackend {
     return op;
   }
 
+  void rebalance(std::vector<migration>& objToSend,
+                 std::vector<migration>& objToRecv);
+
   template <class Accessor, class Index, class T>
   auto rebalance(Phase<Index>& ph, async_collection<T,Index>&& coll){
-    int rebalance_info_tag = 444;
-    int rebalance_data_tag = 445;
-    int currentInfoReq = 0;
-    int currentDataReq = 0;
-
-    static async_ref_base<T>* dummy;
-    using pack_buf_t = decltype(make_packed_buffer<Accessor>(non_local_handler_t{}, *dummy));
-    std::vector<pack_buf_t> packers;
-
     int numSends = 0;
     int numRecvs = 0;
+    async_ref_base<T>* dummy;
+    using pack_buf_t = decltype(make_packed_buffer<Accessor>(non_local_handler_t{}, *dummy));
+    std::vector<migration> toSend;
+    std::vector<migration> toRecv;
+    std::vector<pack_buf_t> packers;
     for (auto& pair : coll->localElements()){
       int index = pair.first;
       int newLoc = ph->getRank(index);
       if (newLoc != rank_){
         ++numSends;
-      }
-    }
-    for (const LocalIndex& lidx : ph->local()){
-      int oldLoc = coll->getRank(lidx.index);
-      if (oldLoc != rank_){
-        ++numRecvs;
-      }
-    }
-
-    std::vector<MPI_Request> sendDataReqs(numSends);
-    std::vector<MPI_Request> sendInfoReqs(numSends);
-    std::vector<MPI_Request> recvInfoReqs(numRecvs);
-    std::vector<MPI_Request> recvDataReqs(numRecvs);
-    std::vector<int> sendInfos(numSends*2);
-    std::vector<Index> toDel(numSends);
-    std::vector<int> recvInfos(numRecvs*2);
-    std::vector<int> sources(numRecvs);
-
-    for (auto& pair : coll->localElements()){
-      int index = pair.first;
-      int newLoc = ph->getRank(index);
-      std::cout << "Index=" << index << " lives on " << rank_
-                << " but will live on " << newLoc << std::endl;
-      if (newLoc != rank_){
-        std::cout << "Rank=" << rank_ << " has " << index
-                  << " but rank=" << newLoc << " needs it" << std::endl;
-        //I have to send data
+        non_local_handler_t handler{};
         T* elem = pair.second;
-        async_ref_base<T> toRecv = async_ref_base<T>::make(elem);
-        auto buffer = make_packed_buffer<Accessor>(non_local_handler_t{}, toRecv);
-        int* info = &sendInfos[2*currentInfoReq];
-        toDel[currentInfoReq] = index;
-        info[0] = buffer.capacity();
-        info[1] = index;
-        send_data(newLoc, info, sizeof(int)*2, rebalance_info_tag, &sendInfoReqs[currentInfoReq++]);
-        send_data(newLoc, buffer.data(), buffer.capacity(), rebalance_data_tag, &sendDataReqs[currentDataReq++]);
+        auto s_ar = handler.make_sizing_archive();
+        Accessor::compute_size(*elem, s_ar);
+        auto p_ar = handler.make_packing_archive(std::move(s_ar));
+        Accessor::pack(*elem, p_ar);
+        auto buffer = handler.extract_buffer(std::move(p_ar));
+        int mpiParent = coll->getParentMpiRank(index);
+        toSend.emplace_back(index, buffer.data(), elem,
+                            buffer.capacity(), newLoc, mpiParent);
         packers.emplace_back(std::move(buffer));
       }
     }
 
-    MPI_Waitall(numSends, sendInfoReqs.data(), MPI_STATUSES_IGNORE);
-
-
-    //add validation pass ensure the incoming data is what we expect
-    currentInfoReq = 0;
     for (const LocalIndex& lidx : ph->local()){
       int oldLoc = coll->getRank(lidx.index);
       if (oldLoc != rank_){
-        int* info = &recvInfos[2*currentInfoReq];
-        sources[currentInfoReq] = oldLoc;
-        std::cout << "Rank=" << rank_
-                  << " wants to receive index " << lidx.index << " from " << oldLoc
-                  << " wrote " << oldLoc << " to " << &sources[currentInfoReq]
-                  << std::endl;
-        recv_data(oldLoc, info, sizeof(int)*2, rebalance_info_tag, &recvInfoReqs[currentInfoReq++]);
+        T* newT = coll->emplaceNew(lidx.index);
+        toRecv.emplace_back(lidx.index, nullptr, newT, 0, oldLoc, -1);
+        ++numRecvs;
       }
     }
 
-    MPI_Waitall(numRecvs, recvInfoReqs.data(), MPI_STATUSES_IGNORE);
+    rebalance(toSend, toRecv);
 
-    std::vector<void*> recvBufs(numRecvs);
-    for (int i=0; i < numRecvs; ++i){
-      int* info = &recvInfos[2*i];
-      int index = info[1];
-      int size = info[0];
-      void* buf = allocate_temp_buffer(size);
-      recvBufs[i] = buf;
-      std::cout << "Rank=" << rank_
-                << " receiving " << size << " bytes "
-                << " in buffer=" << buf
-                << " from " << sources[i] << " at " << &sources[i]
-                << " to transfer index " << index << std::endl;
-      recv_data(sources[i], buf, size, rebalance_data_tag, &recvDataReqs[i]);
-    }
-
-    MPI_Waitall(numRecvs, recvDataReqs.data(), MPI_STATUSES_IGNORE);
-    MPI_Waitall(numSends, sendDataReqs.data(), MPI_STATUSES_IGNORE);
-
-    for (auto& idx : toDel){
-      std::cout << "Rank " << rank_ << " would like to delete " << idx << std::endl;
-      coll->remove(idx);
-    }
-
-    for (int i=0; i < numRecvs; ++i){
-      int* info = &recvInfos[2*i];
-      int index = info[1];
-      int size = info[0];
-      void* buf = recvBufs[i];
+    for (migration& m : toRecv){
       non_local_handler_t handler{};
-      T* newT = coll->emplaceNew(index);
-      std::cout << "Rank=" << rank_
-                << " unpacking " << size << " bytes "
-                << " in buffer=" << buf
-                << " to complete index " << index << std::endl;
       auto u_ar = handler.make_unpacking_archive(
-        darma::serialization::NonOwningSerializationBuffer(buf, size));
-      Accessor::unpack(*newT, u_ar);
-      free_temp_buffer(buf, size);
+        darma::serialization::NonOwningSerializationBuffer(m.buf, m.size));
+      T* obj = (T*) m.obj;
+      Accessor::unpack(*obj, u_ar);
+      free_temp_buffer(m.buf, m.size);
+      std::cout << "Rank=" << rank_ << " would like to note " << m.index
+                << " came from " << m.mpiParent << std::endl;
+      coll->addParentMpiRank(m.index, m.mpiParent);
     }
+
+    for (migration& m : toSend){
+      std::cout << "Rank=" << rank_ << " would like to delete " << m.index << std::endl;
+      coll->remove(m.index);
+      coll->removeParentMpiRank(m.index);
+    }
+
+    coll->index_mapping_ = ph->index_to_rank_mapping_;
 
     async_collection<T,Index> ret(std::move(coll));
     return ret;

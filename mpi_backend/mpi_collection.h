@@ -49,6 +49,10 @@ struct mpi_collection {
     return referenced_;
   }
 
+  void setDarmaCollection(collection<T,Idx>* coll){
+    referenced_ = coll;
+  }
+
   const Idx& size() const {
     return size_;
   }
@@ -89,11 +93,14 @@ struct collection : public collection_base {
     initialized_(false)
   {}
 
-  collection(int size, const std::map<int,T*>& elements) :
+  collection(int rank, int size, const std::map<int,T*>& elements) :
     initialized_(true),
     size_(size),
     local_elements_(elements)
   {
+    for (auto& pair : elements){
+      parent_mpi_ranks_[pair.first] = rank;
+    }
   }
 
   T* getElement(int idx){
@@ -154,12 +161,29 @@ struct collection : public collection_base {
   void remove(const Idx& idx){
     auto iter = local_elements_.find(idx);
     T* t = iter->second;
-    delete t;
+    //delete t;
     local_elements_.erase(idx);
+  }
+
+  void addParentMpiRank(int index, int rank){
+    parent_mpi_ranks_[index] = rank;
+  }
+
+  void removeParentMpiRank(int index){
+    parent_mpi_ranks_.erase(index);
+  }
+
+  int getParentMpiRank(int index) const {
+    auto iter = parent_mpi_ranks_.find(index);
+    if (iter != parent_mpi_ranks_.end()){
+      return iter->second;
+    }
+    return -1;
   }
 
   std::vector<IndexInfo> index_mapping_;
   std::map<int, T*> local_elements_;
+  std::map<int,int> parent_mpi_ranks_;
   int size_;
   bool initialized_;
   std::unique_ptr<mpi_collection<T,Idx>> mpi_parent_;

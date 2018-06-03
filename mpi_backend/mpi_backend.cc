@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <cstdarg>
+#include <sstream>
 
 int MpiBackend::taskIdCtr_ = 1;
 std::vector<RecvOpGeneratorBase<MpiBackend::Context>*> MpiBackend::generators_;
@@ -666,12 +667,14 @@ MpiBackend::send_data(mpi_async_ref& ref, int collId,
 void
 MpiBackend::send_data(int dest, void *data, int size, int tag, MPI_Request *req)
 {
+  std::cout << "Rank=" << rank_ << " sending tag=" << tag << " to " << dest << std::endl;
   MPI_Isend(data, size, MPI_BYTE, dest, tag, comm_, req);
 }
 
 void
 MpiBackend::recv_data(int src, void *data, int size, int tag, MPI_Request *req)
 {
+  std::cout << "Rank=" << rank_ << " recving tag=" << tag << " from " << src << std::endl;
   MPI_Irecv(data, size, MPI_BYTE, src, tag, comm_, req);
 }
 
@@ -688,10 +691,6 @@ MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int
     indices[i] = local[i];
   }
 
-  for (int i : local){
-    std::cout << "Rank=" << rank_ << " now has local index=" << i << std::endl;
-  }
-
   MPI_Allgather(indices.data(), maxNumLocal, MPI_INT, allIndices.data(), maxNumLocal, MPI_INT, comm_);
   mapping.resize(total_size);
 
@@ -705,12 +704,13 @@ MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int
     }
   }
 
-  for (int i=0; i < mapping.size(); ++i){
-    IndexInfo& ii = mapping[i];
-    std::cout << "Rank=" << rank_ << " maps global index=" << i
-              << " to rank=" << ii.rank << " and localId=" << ii.rankUniqueId
-              << std::endl;
+  std::stringstream sstr;
+  sstr << "Rank=" << rank_ << " maps { ";
+  for (int i=0; i < total_size; ++i){
+    sstr << " " << i << ":" << mapping[i].rank;
   }
+  sstr << "}\n";
+  std::cout << sstr.str();
 }
 
 void
@@ -771,6 +771,58 @@ MpiBackend::reset_phase(const std::vector<pair64>& config,
 
 
   make_global_mapping_from_local(indices.size(), localIndices, indices);
+}
+
+void
+MpiBackend::rebalance(std::vector<migration>& objToSend,
+               std::vector<migration>& objToRecv)
+{
+  int rebalance_info_tag = 444;
+  int rebalance_data_tag = 445;
+
+  static const int numInfoFields = 3;
+
+  int numSends = objToSend.size();
+  int numRecvs = objToRecv.size();
+  std::vector<MPI_Request> sendDataReqs(numSends);
+  std::vector<MPI_Request> sendInfoReqs(numSends);
+  std::vector<MPI_Request> recvInfoReqs(numRecvs);
+  std::vector<MPI_Request> recvDataReqs(numRecvs);
+  std::vector<int> sendInfos(numSends*numInfoFields);
+  std::vector<int> recvInfos(numRecvs*numInfoFields);
+
+  for (int i=0; i < numSends; ++i){
+    const migration& m = objToSend[i];
+    int* info = &sendInfos[numInfoFields*i];
+    info[0] = m.size;
+    info[1] = m.index;
+    info[2] = m.mpiParent;
+    std::cout << "Rank=" << rank_ << " sending that " << m.index << " came from " << m.mpiParent << std::endl;
+    send_data(m.rank, info, sizeof(int)*numInfoFields, rebalance_info_tag, &sendInfoReqs[i]);
+    send_data(m.rank, m.buf, m.size, rebalance_data_tag, &sendDataReqs[i]);
+  }
+
+  for (int i=0; i < numRecvs; ++i){
+    migration& m = objToRecv[i];
+    int* info = &recvInfos[numInfoFields*i];
+    recv_data(m.rank, info, sizeof(int)*numInfoFields, rebalance_info_tag, &recvInfoReqs[i]);
+  }
+
+  MPI_Waitall(numSends, sendInfoReqs.data(), MPI_STATUSES_IGNORE);
+  MPI_Waitall(numRecvs, recvInfoReqs.data(), MPI_STATUSES_IGNORE);
+
+  for (int i=0; i < numRecvs; ++i){
+    int* info = &recvInfos[numInfoFields*i];
+    migration& m = objToRecv[i];
+    m.size = info[0];
+    m.index = info[1];
+    m.mpiParent = info[2];
+    m.buf = allocate_temp_buffer(m.size);
+    recv_data(m.rank, m.buf, m.size, rebalance_data_tag, &recvDataReqs[i]);
+  }
+
+  MPI_Waitall(numRecvs, recvDataReqs.data(), MPI_STATUSES_IGNORE);
+  MPI_Waitall(numSends, sendDataReqs.data(), MPI_STATUSES_IGNORE);
 }
 
 void
