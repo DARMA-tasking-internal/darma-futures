@@ -320,18 +320,40 @@ struct MpiBackend {
 
   template <class Accessor, class Index, class T>
   auto rebalance(Phase<Index>& ph, async_collection<T,Index>&& coll){
-    std::vector<MPI_Request> sendDataReqs;
-    std::vector<MPI_Request> sendInfoReqs;
-    std::vector<MPI_Request> recvInfoReqs;
-    std::vector<MPI_Request> recvDataReqs;
-
-    std::vector<int> sendInfos;
-    std::vector<Index> toDel;
-
     int rebalance_info_tag = 444;
     int rebalance_data_tag = 445;
     int currentInfoReq = 0;
     int currentDataReq = 0;
+
+    static async_ref_base<T>* dummy;
+    using pack_buf_t = decltype(make_packed_buffer<Accessor>(non_local_handler_t{}, *dummy));
+    std::vector<pack_buf_t> packers;
+
+    int numSends = 0;
+    int numRecvs = 0;
+    for (auto& pair : coll->localElements()){
+      int index = pair.first;
+      int newLoc = ph->getRank(index);
+      if (newLoc != rank_){
+        ++numSends;
+      }
+    }
+    for (const LocalIndex& lidx : ph->local()){
+      int oldLoc = coll->getRank(lidx.index);
+      if (oldLoc != rank_){
+        ++numRecvs;
+      }
+    }
+
+    std::vector<MPI_Request> sendDataReqs(numSends);
+    std::vector<MPI_Request> sendInfoReqs(numSends);
+    std::vector<MPI_Request> recvInfoReqs(numRecvs);
+    std::vector<MPI_Request> recvDataReqs(numRecvs);
+    std::vector<int> sendInfos(numSends*2);
+    std::vector<Index> toDel(numSends);
+    std::vector<int> recvInfos(numRecvs*2);
+    std::vector<int> sources(numRecvs);
+
     for (auto& pair : coll->localElements()){
       int index = pair.first;
       int newLoc = ph->getRank(index);
@@ -344,44 +366,38 @@ struct MpiBackend {
         T* elem = pair.second;
         async_ref_base<T> toRecv = async_ref_base<T>::make(elem);
         auto buffer = make_packed_buffer<Accessor>(non_local_handler_t{}, toRecv);
-        sendInfos.emplace_back();
-        sendInfos.emplace_back();
         int* info = &sendInfos[2*currentInfoReq];
+        toDel[currentInfoReq] = index;
         info[0] = buffer.capacity();
         info[1] = index;
-        sendInfoReqs.emplace_back();
         send_data(newLoc, info, sizeof(int)*2, rebalance_info_tag, &sendInfoReqs[currentInfoReq++]);
-        sendDataReqs.emplace_back();
         send_data(newLoc, buffer.data(), buffer.capacity(), rebalance_data_tag, &sendDataReqs[currentDataReq++]);
-
-        toDel.emplace_back(index);
+        packers.emplace_back(std::move(buffer));
       }
     }
 
-    MPI_Waitall(sendInfoReqs.size(), sendInfoReqs.data(), MPI_STATUSES_IGNORE);
+    MPI_Waitall(numSends, sendInfoReqs.data(), MPI_STATUSES_IGNORE);
 
-    std::vector<int> recvInfos;
-    std::vector<int> sources;
+
     //add validation pass ensure the incoming data is what we expect
     currentInfoReq = 0;
-    for (auto& pair : coll->localElements()){
-      int index = pair.first;
-      int newLoc = ph->getRank(index);
-      if (newLoc != rank_){
-        recvInfoReqs.emplace_back();
-        recvInfos.emplace_back();
-        recvInfos.emplace_back();
+    for (const LocalIndex& lidx : ph->local()){
+      int oldLoc = coll->getRank(lidx.index);
+      if (oldLoc != rank_){
         int* info = &recvInfos[2*currentInfoReq];
-        recv_data(newLoc, info, sizeof(int)*2, rebalance_info_tag, &recvInfoReqs[currentInfoReq++]);
-        sources.push_back(newLoc);
+        sources[currentInfoReq] = oldLoc;
+        std::cout << "Rank=" << rank_
+                  << " wants to receive index " << lidx.index << " from " << oldLoc
+                  << " wrote " << oldLoc << " to " << &sources[currentInfoReq]
+                  << std::endl;
+        recv_data(oldLoc, info, sizeof(int)*2, rebalance_info_tag, &recvInfoReqs[currentInfoReq++]);
       }
     }
 
-    MPI_Waitall(recvInfoReqs.size(), recvInfoReqs.data(), MPI_STATUSES_IGNORE);
+    MPI_Waitall(numRecvs, recvInfoReqs.data(), MPI_STATUSES_IGNORE);
 
-    std::vector<void*> recvBufs(recvInfoReqs.size());
-    recvDataReqs.resize(recvInfoReqs.size());
-    for (int i=0; i < recvInfoReqs.size(); ++i){
+    std::vector<void*> recvBufs(numRecvs);
+    for (int i=0; i < numRecvs; ++i){
       int* info = &recvInfos[2*i];
       int index = info[1];
       int size = info[0];
@@ -390,17 +406,20 @@ struct MpiBackend {
       std::cout << "Rank=" << rank_
                 << " receiving " << size << " bytes "
                 << " in buffer=" << buf
+                << " from " << sources[i] << " at " << &sources[i]
                 << " to transfer index " << index << std::endl;
       recv_data(sources[i], buf, size, rebalance_data_tag, &recvDataReqs[i]);
     }
 
-    MPI_Waitall(recvDataReqs.size(), recvDataReqs.data(), MPI_STATUSES_IGNORE);
+    MPI_Waitall(numRecvs, recvDataReqs.data(), MPI_STATUSES_IGNORE);
+    MPI_Waitall(numSends, sendDataReqs.data(), MPI_STATUSES_IGNORE);
 
     for (auto& idx : toDel){
+      std::cout << "Rank " << rank_ << " would like to delete " << idx << std::endl;
       coll->remove(idx);
     }
 
-    for (int i=0; i < recvDataReqs.size(); ++i){
+    for (int i=0; i < numRecvs; ++i){
       int* info = &recvInfos[2*i];
       int index = info[1];
       int size = info[0];
@@ -523,7 +542,7 @@ struct MpiBackend {
       ret.setParent(coll);
       return ret;
     } else {
-      error("do not yet support remote get_element from collections");
+      error("do not yet support remote get_element from collections: index %d on rank %d", idx, rank_);
       return async_ref_base<T>::make();
     }
   }
@@ -634,7 +653,7 @@ struct MpiBackend {
   void runBalancer(std::vector<pair64>&& localConfig,
       std::vector<pair64>& newLocalConfig,
       uint64_t localWork, uint64_t globalWork,
-      int maxNumLocalTasks, bool allowGiveTake);
+      int maxNumLocalTasks, bool allowTrades, bool allowGiveTake);
 
  private:
   std::vector<Listener*> listeners_;

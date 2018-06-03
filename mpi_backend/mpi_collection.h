@@ -155,7 +155,7 @@ struct collection : public collection_base {
     auto iter = local_elements_.find(idx);
     T* t = iter->second;
     delete t;
-    local_elements_.erase(iter);
+    local_elements_.erase(idx);
   }
 
   std::vector<IndexInfo> index_mapping_;

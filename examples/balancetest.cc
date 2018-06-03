@@ -2,6 +2,11 @@
 
 using Context=Frontend<MpiBackend>;
 
+static const int primes[] = {
+  1031, 857, 1811, 283, 941, 1019, 1153, 1583
+};
+static const int numPrimes = sizeof(primes) / sizeof(int);
+
 struct BagOfTasks {
 
   struct Compute {
@@ -38,13 +43,28 @@ struct BagOfTasks {
 
 };
 
+void usage(std::ostream& os){
+  os << "Usage: ./run <od_factor> <time-multiplier>";
+}
+
 int main(int argc, char** argv)
 {
   MPI_Init(&argc, &argv);
-  int od_factor = 2;
+
+  if (argc != 4){
+    std::cerr << "Invalid number of arguments: need 2\n";
+    usage(std::cerr);
+    std::cerr << std::endl;
+    return 1;
+  }
+
+  int od_factor = atoi(argv[1]);
+  int time_multiplier = atoi(argv[2]);
+  int random_seed = atoi(argv[3]);
   int rank; MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   int size; MPI_Comm_size(MPI_COMM_WORLD, &size);
   int darma_size = size*od_factor;
+
 
   auto dc = allocate_context(MPI_COMM_WORLD);
   auto phase = dc->make_phase(darma_size);
@@ -52,8 +72,12 @@ int main(int argc, char** argv)
   //this object IS valid to be accessed now
   auto mpi_coll = dc->make_local_collection<int>(darma_size);
   for (int i=0; i < od_factor; ++i){
-    int initialValue = 5*(rank+1); //sleep rank*5 ms
-    mpi_coll->emplaceLocal(rank*od_factor + i, initialValue);
+    int workload = time_multiplier*(rank+1);
+    if (random_seed != 0){ //scramble!
+      int prime = primes[random_seed%numPrimes];
+      workload = time_multiplier*(((rank+1)*prime)%size)*od_factor + i*time_multiplier;
+    }
+    mpi_coll->emplaceLocal(rank*od_factor + i, workload);
   }
 
   auto coll = dc->from_mpi<BagOfTasks::Migrate>(std::move(mpi_coll));
