@@ -81,10 +81,10 @@ MpiBackend::takeTasks(uint64_t desiredDelta, const std::vector<pair64>& giver)
   uint64_t remainingDelta = maxGiveAway;
   for (int i=giver.size() - 1; i >= 0; --i){
     uint64_t taskSize = giver[i].first;
-    std::cout << "Rank " << rank_
-              << " considering give/take of size=" << taskSize
-              << " for index " << giver[i].second
-              << std::endl;
+    //std::cout << "Rank " << rank_
+    //          << " considering give/take of size=" << taskSize
+    //          << " for index " << giver[i].second
+    //          << std::endl;
     if (taskSize < remainingDelta){
       toRet.insert(i); //give it away, give it away, give it away now
       totalGiven += taskSize;
@@ -113,10 +113,10 @@ MpiBackend::tradeTasks(uint64_t desiredDelta,
     smallTaskSize = smaller[smallTaskIdx].first;
     bigTaskSize = bigger[bigTaskIdx].first;
     uint64_t delta = bigTaskSize - smallTaskSize;
-    if (rank_ == 0){
-      std::cout << "Considering " << bigTaskSize << "<->" << smallTaskSize
-                << " for delta=" << delta << "<>" << desiredDelta << std::endl;
-    }
+    //if (rank_ == 0){
+      //std::cout << "Considering " << bigTaskSize << "<->" << smallTaskSize
+      //          << " for delta=" << delta << "<>" << desiredDelta << std::endl;
+    //}
 
     if (desiredDelta > delta){
       uint64_t delta_delta = desiredDelta - delta;
@@ -200,8 +200,7 @@ MpiBackend::balance(std::vector<pair64>&& localConfig)
       localWork += weight;
     }
 
-    std::cout << "Rank=" << rank_ << " has total "
-              << localWork << " from " << oldConfig.size() << " tasks" << std::endl;
+    debug("Rank={} has total {} from {} tasks", rank_, localWork, oldConfig.size());
 
     PerfCtrReduce local;
     local.min = localWork;
@@ -215,12 +214,8 @@ MpiBackend::balance(std::vector<pair64>&& localConfig)
     uint64_t perfBalance = global.total / size_;
 
     if (rank_ == 0){
-      std::cout << "Try " << tryNum << " has global=" << global.total
-                << " with maxTasks=" << global.maxLocalTasks
-                << " with minWork=" << global.min
-                << " and maxWork=" << global.max
-                << " and balanced=" << perfBalance
-                << std::endl;
+      debug("Try {} has global={} with maxTasks={} with minWork={} and maxWork={} and balanced={}",
+            tryNum, global.total, global.maxLocalTasks, global.min, global.max, perfBalance);
     }
 
     uint64_t newImbalance = std::max(perfBalance - global.min, global.max - perfBalance);
@@ -308,13 +303,8 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
   }
 
 
-  std::cout << "Rank=" << rank_
-         << " has localWork=" << localWork
-         << " compared to balanced=" << perfBalance
-         << " with key=" << key
-         << " became rank=" << balanceRank
-         << " with partner=" << partner
-         << std::endl;
+  debug("Rank={} has localWork={} compared to balanced={} with key={} became rank={} with partner={}",
+        rank_, localWork, perfBalance, key, balanceRank, partner);
 
   if (partner == balanceRank){
     MPI_Comm_free(&balanceComm);
@@ -336,18 +326,11 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
   numIncoming /= 2;
   incomingConfig.resize(numIncoming);
 
-
   uint64_t partnerTotalWork = 0;
   for (auto& pair : incomingConfig) partnerTotalWork += pair.first;
 
   int numLocalTasks = localConfig.size();
   int numPartnerTasks = numIncoming;
-
-  std::cout << "Rank=" << balanceRank << ":" << rank_
-            << " has Nlocal=" << numLocalTasks
-            << " and Npartner=" << numPartnerTasks
-            << std::endl;
-
 
   if (localWork < partnerTotalWork){
     // a bit tricky - the change in task sizes should be 1/2 the difference
@@ -368,20 +351,15 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
       if (closeness < minExchangeCloseness){ //only trade if it actually make solution better
         auto& bigTaskPair = incomingConfig[bigTaskIdx];
         auto& smallTaskPair = localConfig[smallTaskIdx];
-        std::cout << "Rank=" << balanceRank << ":" << rank_
-                  << " would like to trade"
-                  << " small=" << smallTaskIdx << "," << smallTaskPair.first << "," << smallTaskPair.second
-                  << " for big=" << bigTaskIdx << "," << bigTaskPair.first << "," << bigTaskPair.second
-                  << " for closeness=" << closeness << " to delta=" << desiredDelta
-                  << std::endl;
+        debug("Rank={}:{} would like to trade small={},{},{} for big={},{},{} for closeness={} to delta={}",
+              balanceRank, rank_,
+              smallTaskIdx, smallTaskPair.first, smallTaskPair.second,
+              bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
+              closeness, desiredDelta);
         smallTaskPair.second = bigTaskPair.second;
         smallTaskPair.first = bigTaskPair.first;
       }
       exchangeFailed = closeness > minCloseness; //great!
-      std::cout << "Rank=" << balanceRank << ":" << rank_
-               << " comparing " << closeness << "<>" << minCloseness
-               << " for exchange: failed? " << std::boolalpha << exchangeFailed
-               << " try give/take? " << std::boolalpha << allowGiveTake << std::endl;
     }
 
     if (exchangeFailed && allowGiveTake){
@@ -391,12 +369,9 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
       for (int bigTaskIdx : toTake){
         auto& bigTaskPair = incomingConfig[bigTaskIdx];
         totalDelta += bigTaskPair.first;
-        std::cout << "Rank=" << balanceRank << ":" << rank_
-                  << " would like to take "
-                  << bigTaskIdx << "," << bigTaskPair.first << "," << bigTaskPair.second
-                  << " for total=" << totalDelta
-                  << " for delta=" << desiredDelta
-                  << std::endl;
+        debug("Rank={}:{} would like to take {},{},{} for total={} delta={}",
+              balanceRank, rank_, bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
+              totalDelta, desiredDelta);
         localConfig.push_back(bigTaskPair);
       }
     }
@@ -417,12 +392,11 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
       if (closeness < minExchangeCloseness){ //only trade if it actually make solution better
         auto& bigTaskPair = localConfig[bigTaskIdx];
         auto& smallTaskPair = incomingConfig[smallTaskIdx];
-        std::cout << "Rank=" << balanceRank << ":" << rank_
-                  << " would like to trade"
-                  << " big=" << bigTaskIdx << "," << bigTaskPair.first << "," << bigTaskPair.second
-                  << " for small=" << smallTaskIdx << "," << smallTaskPair.first << "," << smallTaskPair.second
-                  << " for closeness=" << closeness << " to delta=" << desiredDelta
-                  << std::endl;
+        debug("Rank={} would like to trade big={},{},{} for small={},{},{} for closeness={} to delta={}",
+              balanceRank, rank_,
+              bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
+              smallTaskIdx, smallTaskPair.first, smallTaskPair.second,
+              closeness, desiredDelta);
         bigTaskPair.second = smallTaskPair.second;
         bigTaskPair.first = smallTaskPair.first;
       }
@@ -436,12 +410,9 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
       for (int bigTaskIdx : toGive){
         auto& bigTaskPair = localConfig[bigTaskIdx];
         totalDelta += bigTaskPair.first;
-        std::cout << "Rank=" << balanceRank << ":" << rank_
-                  << " would like to give "
-                  << bigTaskIdx << "," << bigTaskPair.first << "," << bigTaskPair.second
-                  << " for total=" << totalDelta
-                  << " for delta=" << desiredDelta
-                  << std::endl;
+        debug("Rank={}:{} would like to give {},{},{} for total={} delta={}",
+              balanceRank, rank_, bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
+              totalDelta, desiredDelta);
         //this is the task I'm giving away
         int lastIdx = localConfig.size() - 1;
         localConfig[bigTaskIdx] = std::move(localConfig[lastIdx]);
@@ -623,16 +594,6 @@ MpiBackend::clear_dependencies()
 }
 
 void
-MpiBackend::debug(const char *fmt, ...)
-{
-  va_list args;
-  va_start(args, fmt);
-  vfprintf(stdout, fmt, args);
-  va_end(args);
-  fflush(stdout);
-}
-
-void
 MpiBackend::error(const char *fmt, ...)
 {
   va_list args;
@@ -667,14 +628,12 @@ MpiBackend::send_data(mpi_async_ref& ref, int collId,
 void
 MpiBackend::send_data(int dest, void *data, int size, int tag, MPI_Request *req)
 {
-  std::cout << "Rank=" << rank_ << " sending tag=" << tag << " to " << dest << std::endl;
   MPI_Isend(data, size, MPI_BYTE, dest, tag, comm_, req);
 }
 
 void
 MpiBackend::recv_data(int src, void *data, int size, int tag, MPI_Request *req)
 {
-  std::cout << "Rank=" << rank_ << " recving tag=" << tag << " from " << src << std::endl;
   MPI_Irecv(data, size, MPI_BYTE, src, tag, comm_, req);
 }
 
@@ -704,6 +663,7 @@ MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int
     }
   }
 
+  /**
   std::stringstream sstr;
   sstr << "Rank=" << rank_ << " maps { ";
   for (int i=0; i < total_size; ++i){
@@ -711,6 +671,7 @@ MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int
   }
   sstr << "}\n";
   std::cout << sstr.str();
+  */
 }
 
 void
@@ -737,9 +698,6 @@ MpiBackend::reset_phase(const std::vector<pair64>& config,
                         std::vector<LocalIndex>& local,
                         std::vector<IndexInfo>& indices)
 {
-  std::cout << "Rank=" << rank_
-            << " previously had " << local.size() << " tasks "
-            << " but now will have " << config.size() << " tasks" << std::endl;
   for (int i=0; i < local.size() && i < config.size(); ++i){
     LocalIndex& lidx = local[i];
     const pair64& pair = config[i];
@@ -763,13 +721,13 @@ MpiBackend::reset_phase(const std::vector<pair64>& config,
     localIndices.push_back(lidx.index);
   }
 
+  /**
   std::cout << "Rank=" << rank_  << " now has {";
   for (auto& lidx  :local){
     std::cout << " " << lidx.index;
   }
   std::cout << "}" << std::endl;
-
-
+  */
   make_global_mapping_from_local(indices.size(), localIndices, indices);
 }
 
@@ -797,7 +755,6 @@ MpiBackend::rebalance(std::vector<migration>& objToSend,
     info[0] = m.size;
     info[1] = m.index;
     info[2] = m.mpiParent;
-    std::cout << "Rank=" << rank_ << " sending that " << m.index << " came from " << m.mpiParent << std::endl;
     send_data(m.rank, info, sizeof(int)*numInfoFields, rebalance_info_tag, &sendInfoReqs[i]);
     send_data(m.rank, m.buf, m.size, rebalance_data_tag, &sendDataReqs[i]);
   }
@@ -828,7 +785,6 @@ MpiBackend::rebalance(std::vector<migration>& objToSend,
 void
 PendingRecvBase::clear()
 {
-
 }
 
 void

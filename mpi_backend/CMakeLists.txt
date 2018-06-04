@@ -1,20 +1,42 @@
 
 find_package(MPI REQUIRED)
 
+option(DARMA_PRINT_DEBUG "Whether to active debug printing" 0)
+
+
 add_library(darma mpi_backend.cc gather.cc broadcast.cc)
 add_library(darma::darma ALIAS darma)
+
 
 target_include_directories(darma PUBLIC
   $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/mpi_backend>
   $<INSTALL_INTERFACE:include/darma_backend>
 )
+target_include_directories(darma PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/mpi_backend>
+  $<INSTALL_INTERFACE:include/darma_backend>
+)
+
 
 find_package(DarmaSerialization REQUIRED)
 
 target_link_libraries(darma PUBLIC darma_serialization::darma_serialization)
 target_link_libraries(darma PUBLIC darma::darma_frontend)
-
 target_link_libraries(darma PUBLIC MPI::MPI_CXX)
+
+if (DARMA_PRINT_DEBUG)
+find_package(fmt PATHS ${fmt_DIR} ${fmt_DIR}/lib/cmake)
+if(NOT fmt_FOUND)
+message(FATAL_ERROR
+"debug printing requires the fmt library. Please specify valid installation with "
+"-Dfmt_DIR= or install by downloading from https://github.com/fmtlib/fmt"
+)
+endif()
+target_link_libraries(darma PUBLIC fmt::fmt)
+set(DARMA_DEBUG_PRINT_OPT 1)
+else()
+set(DARMA_DEBUG_PRINT_OPT 0)
+endif()
 
 target_compile_options(darma PUBLIC $<$<CONFIG:DEBUG>:-O0 -ggdb>)
 
@@ -33,9 +55,12 @@ export(TARGETS darma
         NAMESPACE darma::
         FILE darmaTargets.cmake)
 
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/darma_config.h 
+        DESTINATION include/darma_backend)
+
 install(DIRECTORY . DESTINATION include/darma_backend
         FILES_MATCHING
-            PATTERN "*.h")
+        PATTERN "*.h")
 
 include(CMakePackageConfigHelpers)
 configure_package_config_file(cmake/darmaConfig.cmake.in
@@ -46,8 +71,13 @@ write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/darmaConfigVersion.
         COMPATIBILITY SameMajorVersion)
 
 install(FILES
-            ${CMAKE_CURRENT_BINARY_DIR}/darmaConfig.cmake
-            ${CMAKE_CURRENT_BINARY_DIR}/darmaConfigVersion.cmake
-        DESTINATION cmake
-        )
+  ${CMAKE_CURRENT_BINARY_DIR}/darmaConfig.cmake
+  ${CMAKE_CURRENT_BINARY_DIR}/darmaConfigVersion.cmake
+  DESTINATION cmake
+)
+
+configure_file(
+ ${CMAKE_CURRENT_SOURCE_DIR}/darma_config.h.in
+ ${CMAKE_CURRENT_BINARY_DIR}/darma_config.h @ONLY
+)
 

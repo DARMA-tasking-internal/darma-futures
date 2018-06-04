@@ -1,6 +1,14 @@
 #ifndef mpi_backend_h
 #define mpi_backend_h
 
+#include "darma_config.h"
+#if DARMA_DEBUG_PRINT
+#include <fmt/format.h>
+#define debug(fmtstr, ...) \
+  std::cout << fmt::format(fmtstr, __VA_ARGS__) << std::endl
+#else
+#define debug(...)
+#endif
 
 #include "mpi_async_ref.h"
 #include "mpi_task.h"
@@ -64,8 +72,6 @@ struct MpiBackend {
   }
 
   void error(const char* fmt, ...);
-
-  void debug(const char* fmt, ...);
 
   Context& frontend() {
     return *static_cast<Context*>(this);
@@ -186,8 +192,7 @@ struct MpiBackend {
       int index = pair.first;
       int newLoc = coll->getRank(index);
       if (newLoc != rank_){
-        std::cout << "Rank=" << rank_ << " needs to send DARMA " << index
-                  << " back to " << newLoc << std::endl;
+        debug("Rank={} needs to send DARMA {} back to {}", rank_, index, newLoc);
         non_local_handler_t handler{};
         T* elem = pair.second;
         auto s_ar = handler.make_sizing_archive();
@@ -205,8 +210,7 @@ struct MpiBackend {
       T* elem = pair.second;
       int oldLoc = coll->getParentMpiRank(index);
       if (oldLoc != rank_){
-        std::cout << "Rank=" << rank_ << " needs to recv DARMA " << index
-                  << " back from " << oldLoc << std::endl;
+        debug("Rank={} needs to recv DARMA {} back from {}", rank_, index, oldLoc);
         toRecv.emplace_back(index, nullptr, elem, 0, oldLoc, oldLoc);
       }
     }
@@ -239,7 +243,6 @@ struct MpiBackend {
       auto ref = async_ref<collection<T,Index>,None,Modify>
             ::make(rank_, mpi_coll->size(), mpi_coll->localElements());
       ref->setId(collIdCtr_++);
-      std::cout << "Making DARMA collection from MPI" << std::endl;
       ref->assignMpi(std::move(mpi_coll));
       return ref;
     }
@@ -262,8 +265,7 @@ struct MpiBackend {
       int index = pair.first;
       int newLoc = arg->getParentMpiRank(index);
       if (newLoc != rank_){
-        std::cout << "Rank=" << rank_ << " needs to send "
-                  << index << " back to " << newLoc << std::endl;
+        debug("Rank={} needs to send {} back to {}", rank_, index, newLoc);
         non_local_handler_t handler{};
         T* elem = pair.second;
         auto s_ar = handler.make_sizing_archive();
@@ -281,8 +283,7 @@ struct MpiBackend {
       T* elem = pair.second;
       int oldLoc = arg->getRank(index);
       if (oldLoc != rank_){
-        std::cout << "Rank=" << rank_ << " needs to recv "
-                  << index << " back from " << oldLoc << std::endl;
+        debug("Rank={} needs to recv {} back from {}", rank_, index, oldLoc);
         toRecv.emplace_back(index, nullptr, elem, 0, oldLoc, rank_);
       }
     }
@@ -473,13 +474,10 @@ struct MpiBackend {
       T* obj = (T*) m.obj;
       Accessor::unpack(*obj, u_ar);
       free_temp_buffer(m.buf, m.size);
-      std::cout << "Rank=" << rank_ << " would like to note " << m.index
-                << " came from " << m.mpiParent << std::endl;
       coll->addParentMpiRank(m.index, m.mpiParent);
     }
 
     for (migration& m : toSend){
-      std::cout << "Rank=" << rank_ << " would like to delete " << m.index << std::endl;
       coll->remove(m.index);
       coll->removeParentMpiRank(m.index);
     }

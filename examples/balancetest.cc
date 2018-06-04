@@ -1,5 +1,12 @@
 #include "mpi_backend.h"
 #include <sstream>
+#include <sys/time.h>
+#include <iomanip>
+
+double get_time(){
+  timeval t; gettimeofday(&t, nullptr);
+  return t.tv_sec + 1e-6*t.tv_usec;
+}
 
 using Context=Frontend<MpiBackend>;
 
@@ -12,8 +19,8 @@ struct BagOfTasks {
 
   struct Compute {
     void operator()(Context* ctx, int index, int rank, int localSleepMs){
-      std::cout << "Index " << index << " sleeping for " << localSleepMs
-                << " on MPI Rank=" << rank << std::endl;
+      debug("Index {} sleeping for {}ms on MPI Rank={}",
+            index, localSleepMs, rank);
       struct timespec sleepTS;
       sleepTS.tv_sec = 0;
       //convert ms to ns
@@ -45,25 +52,32 @@ struct BagOfTasks {
 };
 
 void usage(std::ostream& os){
-  os << "Usage: ./run <od_factor> <time-multiplier>";
+  os << "Usage: ./run <niter> <od_factor> <time-multiplier> <seed> <lb_interval> <mpi_interop_interval>";
 }
 
 int main(int argc, char** argv)
 {
   MPI_Init(&argc, &argv);
-
-  if (argc != 4){
-    std::cerr << "Invalid number of arguments: need 2\n";
-    usage(std::cerr);
-    std::cerr << std::endl;
-    return 1;
-  }
-
-  int od_factor = atoi(argv[1]);
-  int time_multiplier = atoi(argv[2]);
-  int random_seed = atoi(argv[3]);
   int rank; MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   int size; MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+  if (argc != 7){
+    if (rank == 0){
+      std::cerr << "Invalid number of arguments: need 5\n";
+      usage(std::cerr);
+      std::cerr << std::endl;
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    return 0;
+  }
+
+  int niter = atoi(argv[1]);
+  int od_factor = atoi(argv[2]);
+  int time_multiplier = atoi(argv[3]);
+  int random_seed = atoi(argv[4]);
+  int lb_interval = atoi(argv[5]);
+  int mpi_interval = atoi(argv[6]);
+
   int darma_size = size*od_factor;
 
 
@@ -84,15 +98,24 @@ int main(int argc, char** argv)
   auto coll = dc->from_mpi<BagOfTasks::Migrate>(std::move(mpi_coll));
 
   if (dc->run_root()){
-    int niter = 4;
     for (int i=1; i <= niter; ++i){
+      double t_start = get_time();
       std::tie(coll) = dc->create_phase_work<BagOfTasks::Compute>(phase,rank,std::move(coll));
-      if (i % 1 == 0){
+      if (lb_interval && i % lb_interval == 0){
+        if (rank == 0){
+          std::cout << "Running load balancer on iteration... " << i
+                    << std::endl;
+        }
         dc->rebalance(phase);
         coll = dc->rebalance<BagOfTasks::Migrate>(phase,std::move(coll));
       }
-      if (i % 1 == 0){
+      if (mpi_interval && i % mpi_interval == 0){
+        if (rank == 0){
+          std::cout << "MPI-interop on iteration... " << i
+                    << std::endl;
+        }
         mpi_coll = dc->to_mpi<BagOfTasks::Migrate>(std::move(coll));
+        /**
         std::stringstream sstr;
         sstr << "MPI Check: Rank " << rank << " = {";
         for (auto& pair : mpi_coll->localElements()){
@@ -101,7 +124,14 @@ int main(int argc, char** argv)
         }
         sstr << "}\n";
         std::cout << sstr.str();
+        */
         coll = dc->from_mpi<BagOfTasks::Migrate>(std::move(mpi_coll));
+      }
+      double t_stop = get_time();
+      if (rank == 0){
+        double t_ms = (t_stop - t_start)*1e3;
+        std::cout << "Iteration " << i << " took "
+              << std::setprecision(3) << t_ms << "ms" << std::endl;
       }
     }
   } else {
