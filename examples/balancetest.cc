@@ -19,7 +19,7 @@ struct BagOfTasks {
 
   struct Compute {
     void operator()(Context* ctx, int index, int rank, int localSleepMs){
-      debug("Index {} sleeping for {}ms on MPI Rank={}",
+      darmaDebug("Index {} sleeping for {}ms on MPI Rank={}",
             index, localSleepMs, rank);
       struct timespec sleepTS;
       sleepTS.tv_sec = 0;

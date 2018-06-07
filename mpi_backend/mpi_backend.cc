@@ -5,6 +5,10 @@
 #include <cstdarg>
 #include <sstream>
 
+#if DARMA_ZOLTAN_LB
+#include <z2LoadBalancer.hpp>
+#endif
+
 int MpiBackend::taskIdCtr_ = 1;
 std::vector<RecvOpGeneratorBase<MpiBackend::Context>*> MpiBackend::generators_;
 
@@ -200,7 +204,7 @@ MpiBackend::balance(std::vector<pair64>&& localConfig)
       localWork += weight;
     }
 
-    debug("Rank={} has total {} from {} tasks", rank_, localWork, oldConfig.size());
+    darmaDebug("Rank={} has total {} from {} tasks", rank_, localWork, oldConfig.size());
 
     PerfCtrReduce local;
     local.min = localWork;
@@ -214,7 +218,7 @@ MpiBackend::balance(std::vector<pair64>&& localConfig)
     uint64_t perfBalance = global.total / size_;
 
     if (rank_ == 0){
-      debug("Try {} has global={} with maxTasks={} with minWork={} and maxWork={} and balanced={}",
+      darmaDebug("Try {} has global={} with maxTasks={} with minWork={} and maxWork={} and balanced={}",
             tryNum, global.total, global.maxLocalTasks, global.min, global.max, perfBalance);
     }
 
@@ -303,7 +307,7 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
   }
 
 
-  debug("Rank={} has localWork={} compared to balanced={} with key={} became rank={} with partner={}",
+  darmaDebug("Rank={} has localWork={} compared to balanced={} with key={} became rank={} with partner={}",
         rank_, localWork, perfBalance, key, balanceRank, partner);
 
   if (partner == balanceRank){
@@ -351,7 +355,7 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
       if (closeness < minExchangeCloseness){ //only trade if it actually make solution better
         auto& bigTaskPair = incomingConfig[bigTaskIdx];
         auto& smallTaskPair = localConfig[smallTaskIdx];
-        debug("Rank={}:{} would like to trade small={},{},{} for big={},{},{} for closeness={} to delta={}",
+        darmaDebug("Rank={}:{} would like to trade small={},{},{} for big={},{},{} for closeness={} to delta={}",
               balanceRank, rank_,
               smallTaskIdx, smallTaskPair.first, smallTaskPair.second,
               bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
@@ -369,7 +373,7 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
       for (int bigTaskIdx : toTake){
         auto& bigTaskPair = incomingConfig[bigTaskIdx];
         totalDelta += bigTaskPair.first;
-        debug("Rank={}:{} would like to take {},{},{} for total={} delta={}",
+        darmaDebug("Rank={}:{} would like to take {},{},{} for total={} delta={}",
               balanceRank, rank_, bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
               totalDelta, desiredDelta);
         localConfig.push_back(bigTaskPair);
@@ -392,7 +396,7 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
       if (closeness < minExchangeCloseness){ //only trade if it actually make solution better
         auto& bigTaskPair = localConfig[bigTaskIdx];
         auto& smallTaskPair = incomingConfig[smallTaskIdx];
-        debug("Rank={} would like to trade big={},{},{} for small={},{},{} for closeness={} to delta={}",
+        darmaDebug("Rank={} would like to trade big={},{},{} for small={},{},{} for closeness={} to delta={}",
               balanceRank, rank_,
               bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
               smallTaskIdx, smallTaskPair.first, smallTaskPair.second,
@@ -410,7 +414,7 @@ MpiBackend::runBalancer(std::vector<pair64>&& localConfig,
       for (int bigTaskIdx : toGive){
         auto& bigTaskPair = localConfig[bigTaskIdx];
         totalDelta += bigTaskPair.first;
-        debug("Rank={}:{} would like to give {},{},{} for total={} delta={}",
+        darmaDebug("Rank={}:{} would like to give {},{},{} for total={} delta={}",
               balanceRank, rank_, bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
               totalDelta, desiredDelta);
         //this is the task I'm giving away

@@ -4,10 +4,10 @@
 #include "darma_config.h"
 #if DARMA_DEBUG_PRINT
 #include <fmt/format.h>
-#define debug(fmtstr, ...) \
+#define darmaDebug(fmtstr, ...) \
   std::cout << fmt::format(fmtstr, __VA_ARGS__) << std::endl
 #else
-#define debug(...)
+#define darmaDebug(...)
 #endif
 
 #include "mpi_async_ref.h"
@@ -192,7 +192,7 @@ struct MpiBackend {
       int index = pair.first;
       int newLoc = coll->getRank(index);
       if (newLoc != rank_){
-        debug("Rank={} needs to send DARMA {} back to {}", rank_, index, newLoc);
+        darmaDebug("Rank={} needs to send DARMA {} back to {}", rank_, index, newLoc);
         non_local_handler_t handler{};
         T* elem = pair.second;
         auto s_ar = handler.make_sizing_archive();
@@ -210,7 +210,7 @@ struct MpiBackend {
       T* elem = pair.second;
       int oldLoc = coll->getParentMpiRank(index);
       if (oldLoc != rank_){
-        debug("Rank={} needs to recv DARMA {} back from {}", rank_, index, oldLoc);
+        darmaDebug("Rank={} needs to recv DARMA {} back from {}", rank_, index, oldLoc);
         toRecv.emplace_back(index, nullptr, elem, 0, oldLoc, oldLoc);
       }
     }
@@ -265,7 +265,7 @@ struct MpiBackend {
       int index = pair.first;
       int newLoc = arg->getParentMpiRank(index);
       if (newLoc != rank_){
-        debug("Rank={} needs to send {} back to {}", rank_, index, newLoc);
+        darmaDebug("Rank={} needs to send {} back to {}", rank_, index, newLoc);
         non_local_handler_t handler{};
         T* elem = pair.second;
         auto s_ar = handler.make_sizing_archive();
@@ -283,7 +283,7 @@ struct MpiBackend {
       T* elem = pair.second;
       int oldLoc = arg->getRank(index);
       if (oldLoc != rank_){
-        debug("Rank={} needs to recv {} back from {}", rank_, index, oldLoc);
+        darmaDebug("Rank={} needs to recv {} back from {}", rank_, index, oldLoc);
         toRecv.emplace_back(index, nullptr, elem, 0, oldLoc, rank_);
       }
     }

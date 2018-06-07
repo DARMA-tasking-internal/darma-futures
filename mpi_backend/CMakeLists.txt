@@ -2,6 +2,7 @@
 find_package(MPI REQUIRED)
 
 option(DARMA_PRINT_DEBUG "Whether to active debug printing" 0)
+option(DARMA_ZOLTAN_LB "Whether to use Zoltan LB library" 0)
 
 
 add_library(darma mpi_backend.cc gather.cc broadcast.cc)
@@ -36,6 +37,20 @@ target_link_libraries(darma PUBLIC fmt::fmt)
 set(DARMA_DEBUG_PRINT_OPT 1)
 else()
 set(DARMA_DEBUG_PRINT_OPT 0)
+endif()
+
+if (DARMA_ZOLTAN_LB)
+find_package(zoltanLB PATHS ${zoltanLB_DIR} ${zoltanLB_DIR}/cmake)
+if(NOT zoltanLB_FOUND)
+message(FATAL_ERROR
+"Zoltan load balancing requires the zoltanLB library. Please specify valid installation with "
+"-DzoltanLB_DIR="
+)
+endif()
+target_link_libraries(darma PUBLIC zoltanLB::zoltanLB)
+set(DARMA_ZOLTAN_LB_OPT 1)
+else()
+set(DARMA_ZOLTAN_LB_OPT 0)
 endif()
 
 target_compile_options(darma PUBLIC $<$<CONFIG:DEBUG>:-O0 -ggdb>)
