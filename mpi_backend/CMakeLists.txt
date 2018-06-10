@@ -1,11 +1,22 @@
 
 find_package(MPI REQUIRED)
 
+add_subdirectory(parser)
+
 option(DARMA_PRINT_DEBUG "Whether to active debug printing" 0)
 option(DARMA_ZOLTAN_LB "Whether to use Zoltan LB library" 0)
 
+set(SOURCES
+ mpi_backend.cc 
+ gather.cc
+ broadcast.cc
+ zoltan_lb.cc
+ random_lb.cc
+ debug_lb.cc
+ comm_split_lb.cc
+)
 
-add_library(darma mpi_backend.cc gather.cc broadcast.cc)
+add_library(darma ${SOURCES})
 add_library(darma::darma ALIAS darma)
 
 
@@ -24,6 +35,7 @@ find_package(DarmaSerialization REQUIRED)
 target_link_libraries(darma PUBLIC darma_serialization::darma_serialization)
 target_link_libraries(darma PUBLIC darma::darma_frontend)
 target_link_libraries(darma PUBLIC MPI::MPI_CXX)
+target_link_libraries(darma PUBLIC CLI11::CLI11)
 
 if (DARMA_PRINT_DEBUG)
 find_package(fmt PATHS ${fmt_DIR} ${fmt_DIR}/lib/cmake)

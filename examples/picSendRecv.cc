@@ -195,7 +195,7 @@ struct CollectiveMove {
   }
 };
 
-void run()
+void run(int argc, char** argv)
 {
   Swarm mainPatch;
 
@@ -204,7 +204,7 @@ void run()
   int size; MPI_Comm_size(MPI_COMM_WORLD, &size);
   int darma_size = size*od_factor;
 
-  auto dc = allocate_context(MPI_COMM_WORLD);
+  auto dc = allocate_context(MPI_COMM_WORLD, argc, argv);
 
   auto nmoved_coll = dc->make_collection<int>(darma_size);
 
@@ -230,7 +230,7 @@ void run()
 int main(int argc, char** argv)
 {
   MPI_Init(&argc, &argv);
-  run();
+  run(argc, argv);
   MPI_Finalize();
 }
 

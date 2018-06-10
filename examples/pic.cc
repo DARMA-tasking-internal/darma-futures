@@ -97,7 +97,7 @@ int main(int argc, char** argv)
   int size; MPI_Comm_size(MPI_COMM_WORLD, &size);
   int darma_size = size*od_factor;
 
-  auto dc = allocate_context(MPI_COMM_WORLD);
+  auto dc = allocate_context(MPI_COMM_WORLD, argc, argv);
   auto mpi_swarm = dc->make_local_collection<Swarm>(darma_size);
 
   for (int i=0; i < od_factor; ++i){

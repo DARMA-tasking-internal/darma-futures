@@ -162,7 +162,7 @@ int main(int argc, char** argv)
   int nelems = 10;
   double alpha = 0.01;
 
-  auto dc = allocate_context(MPI_COMM_WORLD);
+  auto dc = allocate_context(MPI_COMM_WORLD, argc, argv);
   auto coll = dc->make_collection<Patch>(darma_size);
   auto residuals = dc->make_collection<double>(darma_size);
   auto phase = dc->make_phase(darma_size);

@@ -61,7 +61,10 @@ int main(int argc, char** argv)
   int rank; MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   int size; MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-  if (argc != 7){
+  auto dc = allocate_context(MPI_COMM_WORLD, argc, argv);
+  int app_argc = dc->split_argv(argc,argv);
+
+  if (app_argc != 7){
     if (rank == 0){
       std::cerr << "Invalid number of arguments: need 5\n";
       usage(std::cerr);
@@ -79,9 +82,6 @@ int main(int argc, char** argv)
   int mpi_interval = atoi(argv[6]);
 
   int darma_size = size*od_factor;
-
-
-  auto dc = allocate_context(MPI_COMM_WORLD);
   auto phase = dc->make_phase(darma_size);
 
   //this object IS valid to be accessed now

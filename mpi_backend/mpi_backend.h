@@ -53,6 +53,13 @@ struct MpiBackend {
     }
   };
 
+  typedef enum {
+    RandomLB,
+    CommSplitLB,
+    ZoltanLB,
+    DebugLB
+  } lb_type_t;
+
   struct PerfCtrReduce {
     uint64_t total;
     uint64_t max;
@@ -65,7 +72,7 @@ struct MpiBackend {
 
   static constexpr uintptr_t REQUEST_CLEAR = 0x1;
 
-  MpiBackend(MPI_Comm comm);
+  MpiBackend(MPI_Comm comm, int argc, char** argv);
 
   ~MpiBackend(){
     clear_tasks();
@@ -667,11 +674,29 @@ struct MpiBackend {
     }
   }
 
+  /**
+   * @brief tradeTasks Try to find two tasks to trade between ranks that have a given difference
+   * in workload size. Note, the desired delta is 1/2 the difference in total workload since
+   * once subtracts and the other adds
+   * @param desiredDelta The difference between big/small tasks wanted for exact match
+   * @param bigger  The list of task sizes on the rank with bigger workload
+   * @param smaller The list of task sizes on the rank with smaller workload
+   * @param biggerIdx The index of the task in bigger list that best satisfies desired delta
+   * @param smallerIdx The index of the task in small list that best satisfies desired delta
+   * @return The actual delta achieved
+   */
   uint64_t tradeTasks(uint64_t desiredDelta,
                   const std::vector<pair64>& bigger,
                   const std::vector<pair64>& smaller,
                   int& biggerIdx, int& smallerIdx);
 
+  /**
+   * @brief takeTasks Try to find a set of tasks to balance workload between two rans.
+   * Note, the desired delta is 1/2 the difference in total workload.
+   * @param desiredDelta The difference between big/small tasks wanted for exact match
+   * @param giver The list of task sizes on the rank with bigger workload
+   * @return The set of tasks that best matches delta
+   */
   std::set<int> takeTasks(uint64_t desiredDelta, const std::vector<pair64>& giver);
 
   /**
@@ -689,7 +714,7 @@ struct MpiBackend {
   std::vector<pair64> balance(std::vector<pair64>&& localConfig);
 
   /**
-   * @brief runBalancer
+   * @brief runCommSplitBalancer
    * @param localConfig
    * @param newLocalConfig in-out return of new local config after moving tasks
    * @param localWork The total amount of work currently local
@@ -698,10 +723,15 @@ struct MpiBackend {
    * @param allowGiveTake whether to rigorously enforce only "exchanging" tasks
    *         or to allow giving/taking tasks that change num local
    */
-  void runBalancer(std::vector<pair64>&& localConfig,
+  void runCommSplitBalancer(std::vector<pair64>&& localConfig,
       std::vector<pair64>& newLocalConfig,
       uint64_t localWork, uint64_t globalWork,
       int maxNumLocalTasks, bool allowTrades, bool allowGiveTake);
+
+  std::vector<pair64> zoltanBalance(std::vector<pair64>&& localConfig);
+  std::vector<pair64> randomBalance(std::vector<pair64>&& localConfig);
+  std::vector<pair64> debugBalance(std::vector<pair64>&& localConfig);
+  std::vector<pair64> commSplitBalance(std::vector<pair64>&& localConfig);
 
  private:
   std::vector<Listener*> listeners_;
@@ -728,6 +758,8 @@ struct MpiBackend {
   MPI_Op perfCtrBalanceOp_;
   MPI_Datatype perfCtrBalanceType_;
 
+  lb_type_t lbType_;
+
 };
 
 template <class Accessor, class T, class Index>
@@ -735,8 +767,8 @@ int recv_task_id(){
   return MpiBackend::register_recv_generator<Accessor,T,Index>();
 }
 
-static inline auto allocate_context(MPI_Comm comm){
-  return std::make_unique<Frontend<MpiBackend>>(comm);
+static inline auto allocate_context(MPI_Comm comm, int argc, char** argv){
+  return std::make_unique<Frontend<MpiBackend>>(comm, argc, argv);
 }
 
 #endif
