@@ -77,6 +77,38 @@ MpiBackend::commSplitBalance(std::vector<pair64>&& localConfig)
   return oldConfig; //not really needed, but make compilers happy
 }
 
+int
+MpiBackend::getTradingPartner(int rank) const
+{
+  int halfSize = size_  / 2;
+  int partner;
+  if (rank < halfSize){
+    //there is less work here
+    if (size_%2){
+      //odd number of ranks
+      int rankDelta = halfSize - rank;
+      partner = halfSize + rankDelta;
+    } else {
+      //even number of ranks
+      int rankDelta = halfSize - rank;
+      partner = halfSize + (rankDelta-1);
+    }
+  } else {
+    if (size_%2){
+      //odd number of ranks
+      int rankDelta = rank - halfSize;
+      partner = halfSize - rankDelta;
+    } else {
+      //even number of ranks
+      int rankDelta =  rank - halfSize + 1;
+      partner = halfSize - rankDelta;
+    }
+  }
+  return partner;
+}
+
+
+
 void
 MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
                     std::vector<pair64>& newLocalConfig,
@@ -97,37 +129,8 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
   std::vector<pair64> incomingConfig;
   incomingConfig.resize(maxNumLocalTasks);
 
-  int partner;
+  int partner = getTradingPartner(balanceRank);
   /* if an odd number, round up */
-
-  if (perfBalance > localWork){
-    //there is less work here
-    if (size_%2){
-      //odd number of ranks
-      int halfSize = size_  / 2;
-      int rankDelta = halfSize - balanceRank;
-      partner = halfSize + rankDelta;
-    } else {
-      //even number of ranks
-      int halfSize = size_ / 2;
-      int rankDelta = halfSize - balanceRank;
-      partner = halfSize + (rankDelta-1);
-    }
-  } else {
-    if (size_%2){
-      //odd number of ranks
-      int halfSize = size_  / 2;
-      int rankDelta = balanceRank - halfSize;
-      partner = halfSize - rankDelta;
-    } else {
-      //even number of ranks
-      int halfSize = size_ / 2;
-      int rankDelta =  balanceRank - halfSize + 1;
-      partner = halfSize - rankDelta;
-    }
-
-  }
-
 
   darmaDebug("Rank={} has localWork={} compared to balanced={} with key={} became rank={} with partner={}",
         rank_, localWork, perfBalance, key, balanceRank, partner);
@@ -253,4 +256,93 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
 
   //well, I really hope that worked well
   MPI_Comm_free(&balanceComm);
+}
+
+std::set<int>
+MpiBackend::takeTasks(uint64_t desiredDelta, const std::vector<pair64>& giver)
+{
+  std::set<int> toRet;
+  uint64_t deltaCutoff = desiredDelta / 10;
+  uint64_t maxGiveAway = desiredDelta + deltaCutoff;
+  uint64_t totalGiven = 0;
+  uint64_t remainingDelta = maxGiveAway;
+  for (int i=giver.size() - 1; i >= 0; --i){
+    uint64_t taskSize = giver[i].first;
+    //std::cout << "Rank " << rank_
+    //          << " considering give/take of size=" << taskSize
+    //          << " for index " << giver[i].second
+    //          << std::endl;
+    if (taskSize < remainingDelta){
+      toRet.insert(i); //give it away, give it away, give it away now
+      totalGiven += taskSize;
+      remainingDelta -= taskSize;
+    } else {
+      break; //can do no better
+    }
+  }
+  return toRet;
+}
+
+uint64_t
+MpiBackend::tradeTasks(uint64_t desiredDelta,
+                       const std::vector<pair64>& bigger,
+                       const std::vector<pair64>& smaller,
+                       int& bigTaskIdx, int& smallTaskIdx)
+{
+  //I assume the smaller, bigger are sorted least to greatest coming in
+  smallTaskIdx = 0;
+  size_t smallTaskStop = smaller.size() - 1;
+  bigTaskIdx = bigger.size() - 1;
+  int bestBigIdx = bigTaskIdx, bestSmallIdx = smallTaskIdx;
+  uint64_t bestDeltaDelta = std::numeric_limits<uint64_t>::max();
+  uint64_t smallTaskSize = 0, bigTaskSize = 1; //just to get us started
+  while (smallTaskIdx <= smallTaskStop && bigTaskIdx >= 0 && smallTaskSize < bigTaskSize){
+    smallTaskSize = smaller[smallTaskIdx].first;
+    bigTaskSize = bigger[bigTaskIdx].first;
+    uint64_t delta = bigTaskSize - smallTaskSize;
+    //if (rank_ == 0){
+      //std::cout << "Considering " << bigTaskSize << "<->" << smallTaskSize
+      //          << " for delta=" << delta << "<>" << desiredDelta << std::endl;
+    //}
+
+    if (desiredDelta > delta){
+      uint64_t delta_delta = desiredDelta - delta;
+      if (bestDeltaDelta < delta_delta){
+        //this is only getting worse - return what we had before
+        smallTaskIdx = bestSmallIdx;
+        bigTaskIdx = bestBigIdx;
+        return bestDeltaDelta;
+      }
+      //this is the best I can do - I hope it's good enough
+      return delta_delta;
+    } else {
+      uint64_t delta_delta = delta - desiredDelta;
+      if (bestDeltaDelta < delta_delta){
+        //this is only going to get worse - return what we had before
+        smallTaskIdx = bestSmallIdx;
+        bigTaskIdx = bestBigIdx;
+        return bestDeltaDelta;
+      }
+
+      bestDeltaDelta = delta_delta;
+      bestSmallIdx = smallTaskIdx;
+      bestBigIdx = bigTaskIdx;
+
+      uint64_t smallTaskDelta = std::numeric_limits<uint64_t>::max();
+      uint64_t bigTaskDelta = std::numeric_limits<uint64_t>::max();
+      //increment whichever index causes the least change
+      if (smallTaskIdx < smallTaskStop)
+        smallTaskDelta = smaller[smallTaskIdx+1].first - smaller[smallTaskIdx].first;
+      if (bigTaskIdx > 0)
+        bigTaskDelta = bigger[bigTaskIdx].first - bigger[bigTaskIdx-1].first;
+
+      //depending on which produces the smallest delta, change that index
+      if (bigTaskDelta < smallTaskDelta) bigTaskIdx--;
+      else smallTaskIdx++;
+    }
+  }
+  //the closest thing we have is the biggest task on the small side, smallest task on the big side
+  smallTaskIdx = smallTaskStop;
+  bigTaskIdx = 0;
+  return bestDeltaDelta;
 }

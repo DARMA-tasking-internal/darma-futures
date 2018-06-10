@@ -728,6 +728,13 @@ struct MpiBackend {
       uint64_t localWork, uint64_t globalWork,
       int maxNumLocalTasks, bool allowTrades, bool allowGiveTake);
 
+  /**
+   * @brief getPartner Get a partner for trading tasks
+   * @param rank Current rank in relevant communicator
+   * @return Your partner in the trade
+   */
+  int getTradingPartner(int rank) const;
+
   std::vector<pair64> zoltanBalance(std::vector<pair64>&& localConfig);
   std::vector<pair64> randomBalance(std::vector<pair64>&& localConfig);
   std::vector<pair64> debugBalance(std::vector<pair64>&& localConfig);
