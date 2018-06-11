@@ -1,5 +1,6 @@
 
-find_package(MPI REQUIRED)
+option(DARMA_USE_SST "whether to run with SST" Off)
+
 
 add_subdirectory(parser)
 
@@ -34,8 +35,12 @@ find_package(DarmaSerialization REQUIRED)
 
 target_link_libraries(darma PUBLIC darma_serialization::darma_serialization)
 target_link_libraries(darma PUBLIC darma::darma_frontend)
-target_link_libraries(darma PUBLIC MPI::MPI_CXX)
 target_link_libraries(darma PUBLIC CLI11::CLI11)
+
+if (NOT DARMA_USE_SST)
+find_package(MPI REQUIRED)
+target_link_libraries(darma PUBLIC MPI::MPI_CXX)
+endif()
 
 if (DARMA_PRINT_DEBUG)
 find_package(fmt PATHS ${fmt_DIR} ${fmt_DIR}/lib/cmake)
@@ -47,8 +52,10 @@ message(FATAL_ERROR
 endif()
 target_link_libraries(darma PUBLIC fmt::fmt)
 set(DARMA_DEBUG_PRINT_OPT 1)
+set(look_for_fmt TRUE)
 else()
 set(DARMA_DEBUG_PRINT_OPT 0)
+set(look_for_fmt FALSE)
 endif()
 
 if (DARMA_ZOLTAN_LB)
@@ -61,8 +68,10 @@ message(FATAL_ERROR
 endif()
 target_link_libraries(darma PUBLIC zoltanLB::zoltanLB)
 set(DARMA_ZOLTAN_LB_OPT 1)
+set(look_for_zoltan TRUE)
 else()
 set(DARMA_ZOLTAN_LB_OPT 0)
+set(look_for_zoltan FALSE)
 endif()
 
 target_compile_options(darma PUBLIC $<$<CONFIG:DEBUG>:-O0 -ggdb>)

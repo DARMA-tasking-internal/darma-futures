@@ -126,6 +126,7 @@ int main(int argc, char** argv)
     mainPatch.solveFields();
   }
   MPI_Finalize();
+  return 0;
 }
 
 //register the task with the runtime system

@@ -3,9 +3,11 @@
 #include <z2LoadBalancer.hpp>
 #endif
 
+
 std::vector<MpiBackend::pair64>
 MpiBackend::zoltanBalance(std::vector<pair64>&& localConfig)
 {
+#if DARMA_ZOLTAN_LB
   z2lb::localId_t nLocal = localConfig.size();
   std::vector<z2lb::globalId_t> globalIds(nLocal);
   std::vector<z2lb::scalar_t> weights(nLocal);
@@ -35,4 +37,8 @@ MpiBackend::zoltanBalance(std::vector<pair64>&& localConfig)
   sstr << " }";
   darmaDebug("Rank {} now has IDs {} after Zoltan LB", rank_, sstr.str());
   return newConfig;
+#else
+  error("Zoltan load balancer not implemented/activated");
+  return localConfig;
+#endif
 }

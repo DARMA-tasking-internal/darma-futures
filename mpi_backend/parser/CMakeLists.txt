@@ -54,7 +54,7 @@ write_basic_package_version_file(
 
 # Make version available in the install
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/CLI11ConfigVersion.cmake"
-        DESTINATION lib/cmake/CLI11)
+        DESTINATION lib/cmake)
 
 # Make an export target
 install(TARGETS CLI11
@@ -64,7 +64,7 @@ install(TARGETS CLI11
 install(EXPORT CLI11Targets
         FILE CLI11Config.cmake
         NAMESPACE CLI11::
-        DESTINATION lib/cmake/CLI11)
+        DESTINATION cmake)
 
 # Use find_package on the installed package
 export(TARGETS CLI11

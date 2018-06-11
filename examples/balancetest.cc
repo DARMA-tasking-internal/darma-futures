@@ -138,4 +138,5 @@ int main(int argc, char** argv)
     dc->run_worker();
   }
   MPI_Finalize();
+  return 0;
 }
