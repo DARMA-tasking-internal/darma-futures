@@ -26,7 +26,7 @@ MpiBackend::commSplitBalance(std::vector<pair64>&& localConfig)
       localWork += weight;
     }
 
-    darmaDebug("Rank={} has total {} from {} tasks", rank_, localWork, oldConfig.size());
+    darmaDebug(LB, "Rank={} has total {} from {} tasks", rank_, localWork, oldConfig.size());
 
     PerfCtrReduce local;
     local.min = localWork;
@@ -40,7 +40,7 @@ MpiBackend::commSplitBalance(std::vector<pair64>&& localConfig)
     uint64_t perfBalance = global.total / size_;
 
     if (rank_ == 0){
-      darmaDebug("Try {} has global={} with maxTasks={} with minWork={} and maxWork={} and balanced={}",
+      darmaDebug(LB, "Try {} has global={} with maxTasks={} with minWork={} and maxWork={} and balanced={}",
             tryNum, global.total, global.maxLocalTasks, global.min, global.max, perfBalance);
     }
 
@@ -132,7 +132,7 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
   int partner = getTradingPartner(balanceRank);
   /* if an odd number, round up */
 
-  darmaDebug("Rank={} has localWork={} compared to balanced={} with key={} became rank={} with partner={}",
+  darmaDebug(LB, "Rank={} has localWork={} compared to balanced={} with key={} became rank={} with partner={}",
         rank_, localWork, perfBalance, key, balanceRank, partner);
 
   if (partner == balanceRank){
@@ -180,7 +180,7 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
       if (closeness < minExchangeCloseness){ //only trade if it actually make solution better
         auto& bigTaskPair = incomingConfig[bigTaskIdx];
         auto& smallTaskPair = localConfig[smallTaskIdx];
-        darmaDebug("Rank={}:{} would like to trade small={},{},{} for big={},{},{} for closeness={} to delta={}",
+        darmaDebug(LB, "Rank={}:{} would like to trade small={},{},{} for big={},{},{} for closeness={} to delta={}",
               balanceRank, rank_,
               smallTaskIdx, smallTaskPair.first, smallTaskPair.second,
               bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
@@ -198,7 +198,7 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
       for (int bigTaskIdx : toTake){
         auto& bigTaskPair = incomingConfig[bigTaskIdx];
         totalDelta += bigTaskPair.first;
-        darmaDebug("Rank={}:{} would like to take {},{},{} for total={} delta={}",
+        darmaDebug(LB, "Rank={}:{} would like to take {},{},{} for total={} delta={}",
               balanceRank, rank_, bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
               totalDelta, desiredDelta);
         localConfig.push_back(bigTaskPair);
@@ -221,7 +221,7 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
       if (closeness < minExchangeCloseness){ //only trade if it actually make solution better
         auto& bigTaskPair = localConfig[bigTaskIdx];
         auto& smallTaskPair = incomingConfig[smallTaskIdx];
-        darmaDebug("Rank={} would like to trade big={},{},{} for small={},{},{} for closeness={} to delta={}",
+        darmaDebug(LB, "Rank={} would like to trade big={},{},{} for small={},{},{} for closeness={} to delta={}",
               balanceRank, rank_,
               bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
               smallTaskIdx, smallTaskPair.first, smallTaskPair.second,
@@ -239,7 +239,7 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
       for (int bigTaskIdx : toGive){
         auto& bigTaskPair = localConfig[bigTaskIdx];
         totalDelta += bigTaskPair.first;
-        darmaDebug("Rank={}:{} would like to give {},{},{} for total={} delta={}",
+        darmaDebug(LB, "Rank={}:{} would like to give {},{},{} for total={} delta={}",
               balanceRank, rank_, bigTaskIdx, bigTaskPair.first, bigTaskPair.second,
               totalDelta, desiredDelta);
         //this is the task I'm giving away

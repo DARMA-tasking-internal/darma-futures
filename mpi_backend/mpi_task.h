@@ -12,6 +12,7 @@ struct TaskBase : public Listener {
     counters_(nullptr)
   {}
 
+  virtual ~TaskBase(){}
 
   virtual void run(Context* ctx) = 0;
 

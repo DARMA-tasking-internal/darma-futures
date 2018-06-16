@@ -35,7 +35,7 @@ MpiBackend::zoltanBalance(std::vector<pair64>&& localConfig)
     sstr << " "  << id;
   }
   sstr << " }";
-  darmaDebug("Rank {} now has IDs {} after Zoltan LB", rank_, sstr.str());
+  darmaDebug(LB, "Rank {} now has IDs {} after Zoltan LB", rank_, sstr.str());
   return newConfig;
 #else
   error("Zoltan load balancer not implemented/activated");

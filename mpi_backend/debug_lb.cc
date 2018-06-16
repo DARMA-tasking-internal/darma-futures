@@ -25,7 +25,7 @@ MpiBackend::debugBalance(std::vector<pair64>&& localConfig)
       pair.second = toRecv;
     }
   }
-  darmaDebug("Rank {} trading tasks {},{} with rank {}",
+  darmaDebug(LB, "Rank {} trading tasks {},{} with rank {}",
              rank_, toSend, toRecv, partner);
   return localConfig;
 }

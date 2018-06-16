@@ -1,8 +1,13 @@
 #ifndef mpi_listener_h
 #define mpi_listener_h
 
+#include <memory>
+
 struct Listener {
+
   Listener() : next_(nullptr), join_counter_(0){}
+
+  virtual ~Listener(){}
 
   int increment_join_counter(){ 
     ++join_counter_; 

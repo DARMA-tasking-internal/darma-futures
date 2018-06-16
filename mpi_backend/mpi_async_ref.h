@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <iostream>
+#include <memory>
 #include "mpi_phase.h"
 #include "mpi_collection.h"
 
@@ -53,7 +54,9 @@ static constexpr fwd_ptr_construct_t fwd_ptr_construct = { };
 
 template <class T>
 struct async_ref_base : public mpi_async_ref {
-  async_ref_base(T* t) : t_(t), parent_(nullptr) {}
+  async_ref_base(std::shared_ptr<T>&& t) : t_(t), parent_(nullptr) {}
+
+  async_ref_base(const std::shared_ptr<T>& t) : t_(t), parent_(nullptr) {}
 
   async_ref_base(async_ref_base&& in) :
     t_(in.t_), parent_(in.parent_),
@@ -79,6 +82,10 @@ struct async_ref_base : public mpi_async_ref {
     return parent_;
   }
 
+  auto& sharedPtr() const {
+    return t_;
+  }
+
   template <class Idx>
   collection<T,Idx>* getParent() const {
     return static_cast<collection<T,Idx>*>(parent_);
@@ -89,7 +96,7 @@ struct async_ref_base : public mpi_async_ref {
   }
 
   T* get() const {
-    return t_;
+    return t_.get();
   }
 
   T& operator*(){
@@ -97,7 +104,7 @@ struct async_ref_base : public mpi_async_ref {
   }
 
   T* operator->(){
-    return t_;
+    return t_.get();
   }
 
   operator T&() {
@@ -123,18 +130,23 @@ struct async_ref_base : public mpi_async_ref {
   {
   }
 
-  explicit async_ref_base(fwd_ptr_construct_t, T* ptr) : t_(ptr), parent_(nullptr) {
-  }
+  explicit async_ref_base(fwd_ptr_construct_t, const std::shared_ptr<T>& ptr)
+    : t_(ptr), parent_(nullptr)
+  {}
+
+  explicit async_ref_base(fwd_ptr_construct_t, std::shared_ptr<T>&& ptr)
+    : t_(ptr), parent_(nullptr)
+  {}
 
   template <class... Args>
   explicit async_ref_base(in_place_construct_t, Args&&... args) : parent_(nullptr) {
     //only backend can call this ctor
-    t_ = new T(std::forward<Args>(args)...);
+    t_ = std::make_shared<T>(std::forward<Args>(args)...);
   }
 
  private:
   collection_base* parent_;
-  T* t_;
+  std::shared_ptr<T> t_;
 
 };
 

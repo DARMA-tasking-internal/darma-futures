@@ -4,11 +4,25 @@
 #include "darma_config.h"
 #if DARMA_DEBUG_PRINT
 #include <fmt/format.h>
-#define darmaDebug(fmtstr, ...) \
-  std::cout << fmt::format(fmtstr, __VA_ARGS__) << std::endl
+#define darmaDebug(flag, fmtstr, ...) \
+  if (DebugFlag<DebugFlags::flag>::active) \
+    std::cout << fmt::format(fmtstr, __VA_ARGS__) << std::endl
 #else
 #define darmaDebug(...)
 #endif
+
+struct DebugFlags {
+  struct LB { };
+  struct SendRecv {};
+  struct Interop {};
+  struct Task {};
+};
+
+template <class T>
+struct DebugFlag {
+  static bool active;
+};
+template <class T> bool DebugFlag<T>::active = false;
 
 #include "mpi_async_ref.h"
 #include "mpi_task.h"
@@ -74,9 +88,7 @@ struct MpiBackend {
 
   MpiBackend(MPI_Comm comm, int argc, char** argv);
 
-  ~MpiBackend(){
-    clear_tasks();
-  }
+  ~MpiBackend();
 
   void error(const char* fmt, ...);
 
@@ -161,23 +173,23 @@ struct MpiBackend {
   void register_pred_cond_dependency(task*, T&&){}
 
   void register_pred_cond_dependency(task* t, mpi_async_ref& in){
-    register_dependency(t,in);
+    register_dependency(std::move(t),in);
   }
 
   template <class T> //no ops if not async refs
-  void register_pred_body_dependency(task*, T&&){}
+  void register_pred_body_dependency(task* t, T&&){}
 
   void register_pred_body_dependency(task* t, mpi_async_ref& in){
-    register_dependency(t,in);
+    register_dependency(std::move(t),in);
   }
 
   void register_task(task* t){
-    if (t->join_counter() == 0) taskQueue_.push_back(t);
+    if (t->join_counter() == 0) taskQueue_.push_back(std::move(t));
   }
 
   void register_predicated_task(task* t){
     //don't do anything special for predicate tasks
-    register_task(t);
+    register_task(std::move(t));
   }
 
   //template <class PackFunctor, class UnpackFunctor, class TaskFunctor,
@@ -199,26 +211,26 @@ struct MpiBackend {
       int index = pair.first;
       int newLoc = coll->getRank(index);
       if (newLoc != rank_){
-        darmaDebug("Rank={} needs to send DARMA {} back to {}", rank_, index, newLoc);
+        darmaDebug(Interop, "Rank={} needs to send DARMA {} back to {}", rank_, index, newLoc);
         non_local_handler_t handler{};
-        T* elem = pair.second;
+        auto elem = pair.second;
         auto s_ar = handler.make_sizing_archive();
         Accessor::compute_size(*elem, s_ar);
         auto p_ar = handler.make_packing_archive(std::move(s_ar));
         Accessor::pack(*elem, p_ar);
         auto buffer = handler.extract_buffer(std::move(p_ar));
-        toSend.emplace_back(index, buffer.data(), elem, buffer.capacity(), newLoc, rank_);
+        toSend.emplace_back(index, buffer.data(), elem.get(), buffer.capacity(), newLoc, rank_);
         packers.emplace_back(std::move(buffer));
       }
     }
 
     for (auto& pair : coll->localElements()){
       int index = pair.first;
-      T* elem = pair.second;
+      auto elem = pair.second;
       int oldLoc = coll->getParentMpiRank(index);
       if (oldLoc != rank_){
-        darmaDebug("Rank={} needs to recv DARMA {} back from {}", rank_, index, oldLoc);
-        toRecv.emplace_back(index, nullptr, elem, 0, oldLoc, oldLoc);
+        darmaDebug(Interop, "Rank={} needs to recv DARMA {} back from {}", rank_, index, oldLoc);
+        toRecv.emplace_back(index, nullptr, elem.get(), 0, oldLoc, oldLoc);
       }
     }
 
@@ -240,8 +252,8 @@ struct MpiBackend {
   auto from_mpi(mpi_collection_ptr<T,Index>&& mpi_coll){
     //no load balancing yet, so this does nothing
     if (mpi_coll->referencesDarmaCollection()){
-      collection<T,Index>* darma_coll = mpi_coll->darmaCollection();
-      from_mpi_shuffle<Accessor,T,Index>(mpi_coll, darma_coll);
+      auto darma_coll = mpi_coll->darmaCollection();
+      from_mpi_shuffle<Accessor,T,Index>(mpi_coll, darma_coll.get());
       //this was remapped from a previous collection
       darma_coll->assignMpi(std::move(mpi_coll));
       return async_ref<collection<T,Index>,None,Modify>::make(darma_coll);
@@ -272,26 +284,26 @@ struct MpiBackend {
       int index = pair.first;
       int newLoc = arg->getParentMpiRank(index);
       if (newLoc != rank_){
-        darmaDebug("Rank={} needs to send {} back to {}", rank_, index, newLoc);
+        darmaDebug(Interop, "Rank={} needs to send {} back to {}", rank_, index, newLoc);
         non_local_handler_t handler{};
-        T* elem = pair.second;
+        auto elem = pair.second;
         auto s_ar = handler.make_sizing_archive();
         Accessor::compute_size(*elem, s_ar);
         auto p_ar = handler.make_packing_archive(std::move(s_ar));
         Accessor::pack(*elem, p_ar);
         auto buffer = handler.extract_buffer(std::move(p_ar));
-        toSend.emplace_back(index, buffer.data(), elem, buffer.capacity(), newLoc, newLoc);
+        toSend.emplace_back(index, buffer.data(), elem.get(), buffer.capacity(), newLoc, newLoc);
         packers.emplace_back(std::move(buffer));
       }
     }
 
     for (auto& pair : mpiParent->localElements()){
       int index = pair.first;
-      T* elem = pair.second;
+      auto elem = pair.second;
       int oldLoc = arg->getRank(index);
       if (oldLoc != rank_){
-        darmaDebug("Rank={} needs to recv {} back from {}", rank_, index, oldLoc);
-        toRecv.emplace_back(index, nullptr, elem, 0, oldLoc, rank_);
+        darmaDebug(Interop, "Rank={} needs to recv {} back from {}", rank_, index, oldLoc);
+        toRecv.emplace_back(index, nullptr, elem.get(), 0, oldLoc, rank_);
       }
     }
 
@@ -306,7 +318,7 @@ struct MpiBackend {
       free_temp_buffer(m.buf, m.size);
     }
 
-    mpiParent->setDarmaCollection(arg.get());
+    mpiParent->setDarmaCollection(arg.sharedPtr());
     return std::move(mpiParent);
   }
 
@@ -347,7 +359,10 @@ struct MpiBackend {
         std::forward<RemoteIndex>(remote),
         std::forward<Args>(args)...
       );
-      send_data(ref, parent->id(), src, dst, buffer.data(), buffer.capacity());
+      int reqId = send_data(ref, parent->id(), src, dst, buffer.data(), buffer.capacity());
+      auto* listener = new PendingSend<decltype(buffer)>(std::move(buffer));
+      listener->increment_join_counter();
+      listeners_[reqId] = listener;
     }
 
     //size
@@ -427,6 +442,7 @@ struct MpiBackend {
 
     using MyRecv = NonLocalPendingRecv<Accessor,T,index_t,std::remove_reference_t<Args>...>;
     auto* pending = new MyRecv(std::move(ref), std::forward<Args>(args)...);
+    pending->increment_join_counter();
     add_pending_recv(pending, parent->id(), localEntry, remoteEntry);
     RecvOp<T> op{};
     return op;
@@ -450,14 +466,14 @@ struct MpiBackend {
       if (newLoc != rank_){
         ++numSends;
         non_local_handler_t handler{};
-        T* elem = pair.second;
+        auto elem = pair.second;
         auto s_ar = handler.make_sizing_archive();
         Accessor::compute_size(*elem, s_ar);
         auto p_ar = handler.make_packing_archive(std::move(s_ar));
         Accessor::pack(*elem, p_ar);
         auto buffer = handler.extract_buffer(std::move(p_ar));
         int mpiParent = coll->getParentMpiRank(index);
-        toSend.emplace_back(index, buffer.data(), elem,
+        toSend.emplace_back(index, buffer.data(), elem.get(),
                             buffer.capacity(), newLoc, mpiParent);
         packers.emplace_back(std::move(buffer));
       }
@@ -466,8 +482,8 @@ struct MpiBackend {
     for (const LocalIndex& lidx : ph->local()){
       int oldLoc = coll->getRank(lidx.index);
       if (oldLoc != rank_){
-        T* newT = coll->emplaceNew(lidx.index);
-        toRecv.emplace_back(lidx.index, nullptr, newT, 0, oldLoc, -1);
+        auto newT = coll->emplaceNew(lidx.index);
+        toRecv.emplace_back(lidx.index, nullptr, newT.get(), 0, oldLoc, -1);
         ++numRecvs;
       }
     }
@@ -586,14 +602,14 @@ struct MpiBackend {
 
   template <class Index, class T>
   auto get_element(const Index& idx, collection<T,Index>* coll){
-    T* t = coll->getElement(idx);
+    auto t = coll->getElement(idx);
     if (t){
       async_ref_base<T> ret(coll->getElement(idx));
       ret.setParent(coll);
       return ret;
     } else if (!coll->initialized()){
       async_ref_base<T> ret = async_ref_base<T>::make();
-      coll->setElement(idx, ret.get());
+      coll->setElement(idx, ret.sharedPtr());
       ret.setParent(coll);
       return ret;
     } else {
@@ -641,7 +657,12 @@ struct MpiBackend {
   };
 
   void inform_listener(int idx);
-  void progress_dependencies();
+
+  /**
+   * @brief progress_dependencies
+   * @return Whether there are any pending active requests (non-null)
+   */
+  bool progress_dependencies();
   void progress_tasks();
   void progress_engine();
   void clear_dependencies();
@@ -654,7 +675,7 @@ struct MpiBackend {
   void create_pending_recvs();
   void add_pending_recv(PendingRecvBase* recv, int collId,
                         const IndexInfo& local, const IndexInfo& remote);
-  void send_data(mpi_async_ref& in, int collId,
+  int send_data(mpi_async_ref& in, int collId,
                  const IndexInfo& src, const IndexInfo& dst,
                  void* data, int size, int taskId = 0 /*zero means no task*/);
 
@@ -741,12 +762,23 @@ struct MpiBackend {
   std::vector<pair64> commSplitBalance(std::vector<pair64>&& localConfig);
 
  private:
+  struct PostedRecv {
+    int size;
+    void* data;
+    int id;
+    PostedRecv(int i, int s, void* d) :
+      id(i), size(s), data(d){}
+  };
+
   std::vector<Listener*> listeners_;
   std::vector<int> indices_;
   std::vector<MPI_Request> requests_;
   std::vector<MPI_Status> statuses_;
+  std::vector<int> freeRequests_;
+  std::vector<darma::serialization::DynamicSerializationBuffer<>> sendBuffers_;
   std::list<task*> taskQueue_;
   std::map<int,collection_base*> collections_;
+  std::map<int,std::list<PostedRecv>> recvsQueued_;
   std::map<int,std::map<int,std::list<PendingRecvBase*>>> pendingRecvs_;
   MPI_Comm comm_;
   int rank_;
@@ -761,9 +793,6 @@ struct MpiBackend {
 
   MPI_Op perfCtrOp_;
   MPI_Datatype perfCtrType_;
-
-  MPI_Op perfCtrBalanceOp_;
-  MPI_Datatype perfCtrBalanceType_;
 
   lb_type_t lbType_;
 

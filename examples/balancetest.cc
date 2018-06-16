@@ -19,7 +19,7 @@ struct BagOfTasks {
 
   struct Compute {
     void operator()(Context* ctx, int index, int rank, int localSleepMs){
-      darmaDebug("Index {} sleeping for {}ms on MPI Rank={}",
+      darmaDebug(Task, "Index {} sleeping for {}ms on MPI Rank={}",
             index, localSleepMs, rank);
       struct timespec sleepTS;
       sleepTS.tv_sec = 0;
@@ -55,9 +55,8 @@ void usage(std::ostream& os){
   os << "Usage: ./run <niter> <od_factor> <time-multiplier> <seed> <lb_interval> <mpi_interop_interval>";
 }
 
-int main(int argc, char** argv)
+int run(int argc, char** argv)
 {
-  MPI_Init(&argc, &argv);
   int rank; MPI_Comm_rank(MPI_COMM_WORLD, &rank);
   int size; MPI_Comm_size(MPI_COMM_WORLD, &size);
 
@@ -66,7 +65,7 @@ int main(int argc, char** argv)
 
   if (app_argc != 7){
     if (rank == 0){
-      std::cerr << "Invalid number of arguments: need 5\n";
+      std::cerr << "Invalid number of arguments: need 6\n";
       usage(std::cerr);
       std::cerr << std::endl;
     }
@@ -137,6 +136,13 @@ int main(int argc, char** argv)
   } else {
     dc->run_worker();
   }
-  MPI_Finalize();
   return 0;
+}
+
+int main(int argc, char** argv)
+{
+  MPI_Init(&argc, &argv);
+  int rc = run(argc, argv);
+  MPI_Finalize();
+  return rc;
 }

@@ -4,6 +4,7 @@
 #include <map>
 #include <vector>
 #include <utility>
+#include <memory>
 #include "mpi_phase.h"
 
 template <class Idx>
@@ -42,14 +43,14 @@ struct mpi_collection {
   mpi_collection(mpi_collection&&) = default;
 
   bool referencesDarmaCollection() const {
+    return bool(referenced_);
+  }
+
+  auto darmaCollection() const {
     return referenced_;
   }
 
-  collection<T,Idx>* darmaCollection() const {
-    return referenced_;
-  }
-
-  void setDarmaCollection(collection<T,Idx>* coll){
+  void setDarmaCollection(const std::shared_ptr<collection<T,Idx>>& coll){
     referenced_ = coll;
   }
 
@@ -71,14 +72,14 @@ struct mpi_collection {
 
   template <class... Args>
   T& emplaceLocal(const Idx& idx, Args&&... args){
-    T* elem = new T(std::forward<Args>(args)...);
+    auto elem = std::make_shared<T>(std::forward<Args>(args)...);
     local_elements_[idx] = elem;
     return *elem;
   }
 
  private:
-  std::map<int, T*> local_elements_;
-  collection<T,Idx>* referenced_;
+  std::map<int, std::shared_ptr<T>> local_elements_;
+  std::shared_ptr<collection<T,Idx>> referenced_;
   int size_;
 
 };
@@ -93,7 +94,7 @@ struct collection : public collection_base {
     initialized_(false)
   {}
 
-  collection(int rank, int size, const std::map<int,T*>& elements) :
+  collection(int rank, int size, const std::map<int,std::shared_ptr<T>>& elements) :
     initialized_(true),
     size_(size),
     local_elements_(elements)
@@ -103,12 +104,12 @@ struct collection : public collection_base {
     }
   }
 
-  T* getElement(int idx){
+  auto getElement(int idx){
     auto iter = local_elements_.find(idx);
     return iter == local_elements_.end() ? nullptr : iter->second;
   }
 
-  void setElement(int idx, T* t){
+  void setElement(int idx, const std::shared_ptr<T>& t){
     local_elements_[idx] = t;
   }
 
@@ -144,8 +145,8 @@ struct collection : public collection_base {
     index_mapping_ = ph.mapping();
   }
 
-  T* emplaceNew(const Idx& idx){
-    T* t = new T;
+  auto emplaceNew(const Idx& idx){
+    auto t = std::make_shared<T>();
     local_elements_[idx] = t;
     return t;
   }
@@ -154,14 +155,11 @@ struct collection : public collection_base {
     return index_mapping_[index];
   }
 
-  const std::map<int,T*> localElements() const {
+  auto& localElements() const {
     return local_elements_;
   }
 
   void remove(const Idx& idx){
-    auto iter = local_elements_.find(idx);
-    T* t = iter->second;
-    //delete t;
     local_elements_.erase(idx);
   }
 
@@ -182,7 +180,7 @@ struct collection : public collection_base {
   }
 
   std::vector<IndexInfo> index_mapping_;
-  std::map<int, T*> local_elements_;
+  std::map<int, std::shared_ptr<T>> local_elements_;
   std::map<int,int> parent_mpi_ranks_;
   int size_;
   bool initialized_;
