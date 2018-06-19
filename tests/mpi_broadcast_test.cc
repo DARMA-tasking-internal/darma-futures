@@ -46,8 +46,6 @@ TEST(mpi_broadcast_test, BroadcastAsyncRef) { // NOLINT
   auto ret = darma_backend::broadcast< int >(std::move(ref), 0);
   
   EXPECT_EQ(*ret->getElement(rank), value);
-  
-  delete ret->getElement(rank);
 }
 
 constexpr int g_testval = 17;
@@ -75,7 +73,7 @@ TEST(mpi_broadcast_test, BroadcastFrontend) { // NOLINT
   int nranks;
   MPI_Comm_size(MPI_COMM_WORLD, &nranks);
   
-  auto dc = allocate_context(MPI_COMM_WORLD);
+  auto dc = allocate_context(MPI_COMM_WORLD, 0, nullptr);
   
   auto val = dc->make_async_ref< int >();
   auto phase = dc->make_phase(nranks);
