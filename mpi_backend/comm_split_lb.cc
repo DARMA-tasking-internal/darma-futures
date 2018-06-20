@@ -1,4 +1,5 @@
 #include "mpi_backend.h"
+#include <algorithm>
 
 std::vector<MpiBackend::pair64>
 MpiBackend::commSplitBalance(std::vector<pair64>&& localConfig)

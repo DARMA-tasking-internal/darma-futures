@@ -185,6 +185,8 @@ MpiBackend::balance(std::vector<pair64>&& localConfig)
     case DebugLB:
       return debugBalance(std::move(localConfig));
   }
+  
+  return std::vector<MpiBackend::pair64>{};
 }
 
 void

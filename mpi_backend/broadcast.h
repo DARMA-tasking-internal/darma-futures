@@ -53,7 +53,7 @@ namespace darma_backend {
       detail::broadcast_internal(buff, root, comm);
       
       // TODO: figure out how collection should store things to avoid a memory leak here
-      ret.setElement(rank, new T (std::move(*ref)));
+      ret.setElement(rank, std::make_shared<T>(std::move(*ref)));
     } else {
       auto datasizebuff = serialization_buffer(sizeof(std::size_t));
   
@@ -66,7 +66,7 @@ namespace darma_backend {
       detail::broadcast_internal(buff, root, comm);
   
       // TODO: figure out how collection should store things to avoid a memory leak here
-      ret.setElement(rank, new T (serializer::deserialize<T>(buff)));
+      ret.setElement(rank, std::make_shared<T>(serializer::deserialize<T>(buff)));
     }
   
     return async_ref_base<collection<T, IndexType>>::make(std::move(ret));

@@ -42,9 +42,9 @@ TEST(mpi_gather_test, GatherAsyncRef) { // NOLINT
   std::tie(start, end) = detail::range_for_rank(rank, nranks, 0, static_cast<int>(element_vector.size()));
   
   for (int i = start; i < end; ++i)
-    coll.setElement(i, &element_vector[i]);
+    coll.setElement(i, std::make_shared< int >( element_vector[i] ));
   
-  auto ref = async_ref<collection<int, int>, ReadOnly, None>::make(&coll);
+  auto ref = async_ref<collection<int, int>, ReadOnly, None>::make(std::move(coll));
   
   auto retref = darma_backend::gather(std::move(ref), 0);
   
@@ -88,7 +88,7 @@ struct check_vecs
 
 TEST(mpi_gather_test, GatherFrontend)
 {
-  auto dc = allocate_context(MPI_COMM_WORLD);
+  auto dc = allocate_context(MPI_COMM_WORLD, 0, nullptr);
   
   auto c = dc->make_collection<int>(static_cast<int>(g_element_vector.size()));
   auto phase = dc->make_phase(static_cast<int>(g_element_vector.size()));
@@ -133,7 +133,7 @@ struct check_elements
 
 TEST(mpi_gather_test, GatherFrontendComplexSerialization)
 {
-  auto dc = allocate_context(MPI_COMM_WORLD);
+  auto dc = allocate_context(MPI_COMM_WORLD, 0, nullptr);
   
   auto c = dc->make_collection<std::vector<int>>(static_cast<int>(g_elements.size()));
   auto phase = dc->make_phase(static_cast<int>(g_elements.size()));
