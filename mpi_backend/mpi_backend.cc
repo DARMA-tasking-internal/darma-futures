@@ -113,15 +113,6 @@ MpiBackend::MpiBackend(MPI_Comm comm, int argc, char** argv) :
 
 }
 
-struct TagMaker {
-  unsigned int frontPadding : 1,
-    collId : 8,
-    dstId : 9,
-    srcId : 9,
-    taskId : 4,
-    backPadding : 1;
-};
-
 template <int T>
 struct print_size;
 
@@ -145,18 +136,24 @@ MpiBackend::~MpiBackend()
   MPI_Op_free(&perfCtrOp_);
 }
 
+static const uint32_t collIdMask = 0xF << 16;
+static const uint32_t dstIdMask = 0x3F << 10;
+static const uint32_t srcIdMask = 0x3F << 4;
+static const uint32_t taskIdMask = 0x7;
+
 int
 MpiBackend::makeUniqueTag(int collId, int dstId, int srcId, int taskId){
   //this is dirty - but don't hate
-  TagMaker tag;
-  tag.frontPadding = 0;
-  tag.collId = collId;
-  tag.dstId = dstId;
-  tag.srcId = srcId;
-  tag.taskId = taskId; //zero means no task
-  tag.backPadding = 0;
-  static_assert(sizeof(TagMaker) <= sizeof(int), "tag is small enough");
-  return *reinterpret_cast<int*>(&tag);
+  int tag = 0;
+  tag = tag | uint32_t(collId) << 16;
+  tag = tag | uint32_t(dstId) << 10;
+  tag = tag | uint32_t(srcId) << 4;
+  tag = tag | uint32_t(taskId);
+  int maxTag = 1<<21 - 1;
+  if (tag > maxTag){
+    error("Invalid tag %d from %d-%d-%d-%d", tag, collId, dstId, srcId, taskId);
+  }
+  return tag;
 }
 
 std::vector<MpiBackend::pair64>
@@ -192,17 +189,22 @@ MpiBackend::balance(std::vector<pair64>&& localConfig)
 void
 MpiBackend::create_pending_recvs()
 {
+  int numIter = 0;
   while(numPendingProbes_ > 0){
     MPI_Status stat;
     MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, comm_, &stat);
 
     //this might be an incoming task - or it might just be a message
     PendingRecvBase* recv = nullptr;
-    TagMaker* tagger = (TagMaker*) &stat.MPI_TAG;
-    if (tagger->taskId != 0){
+    int tag = stat.MPI_TAG;
+    int collId = (tag & collIdMask) >> 16;
+    int dstId = (tag & dstIdMask) >> 10;
+    int srcId = (tag & srcIdMask) >> 4;
+    int taskId = (tag & taskIdMask);
+    if (taskId != 0){
       //this delivered a task to me
-      auto& gen = generators_[tagger->taskId];
-      recv = gen->generate(frontendPtr(), tagger->dstId, tagger->collId);
+      auto& gen = generators_[taskId];
+      recv = gen->generate(frontendPtr(), dstId, collId);
     } else {
       auto& rankMap = pendingRecvs_[stat.MPI_SOURCE];
       auto iter = rankMap.find(stat.MPI_TAG);
@@ -280,6 +282,7 @@ MpiBackend::allocate_request()
   if (freeRequests_.empty()){
     int ret = requests_.size();
     requests_.push_back(MPI_REQUEST_NULL);
+    indices_.push_back(0);
     listeners_.push_back(nullptr);
     statuses_.emplace_back();
     return ret;
@@ -429,9 +432,18 @@ MpiBackend::error(const char *fmt, ...)
 void
 MpiBackend::clear_tasks()
 {
+  uint64_t numTries = 0;
   while (!taskQueue_.empty()){
     progress_dependencies();
     progress_tasks();
+    ++numTries;
+    if (numTries > 1e3){
+      std::cerr << "Have " << numPendingProbes_
+        << " " << requests_.size()
+        << " " << freeRequests_.size()
+        << std::endl;
+      abort();
+    }
   }
 
   while(progress_dependencies());
@@ -603,9 +615,6 @@ PendingRecvBase::clear()
 void
 PendingRecvBase::configure(MpiBackend* be, int size, void* data)
 {
-  if (size == 0){
-    abort();
-  }
   be_ = static_cast<Frontend<MpiBackend>*>(be);
   size_ = size;
   data_ = data;

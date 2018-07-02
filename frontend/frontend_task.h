@@ -22,6 +22,10 @@ class FrontendTaskBase {
     return f(ctx, std::move(std::get<I>(args_))...);
   }
 
+  bool has_collection_args() const {
+    return true;
+  }
+
   template<typename Function, typename Arg, size_t ... I>
   auto callWithArg(Function&& f, Context* ctx, Arg& arg, std::index_sequence<I ...>)
   {
