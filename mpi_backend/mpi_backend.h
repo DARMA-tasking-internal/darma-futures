@@ -160,6 +160,7 @@ struct MpiBackend {
 
   template <class Idx>
   void rebalance(Phase<Idx>& ph){
+    clear_tasks();
     std::vector<pair64> newConfig = balance(ph->local());
     reset_phase(newConfig, ph->local_, ph->index_to_rank_mapping_);
   }
@@ -183,6 +184,11 @@ struct MpiBackend {
     register_dependency(std::move(t),in);
   }
 
+  void register_control_task(task* t){
+    if (t->join_counter() == 0) taskQueue_.push_back(std::move(t));
+    clear_tasks();
+  }
+
   void register_task(task* t){
     if (t->join_counter() == 0) taskQueue_.push_back(std::move(t));
   }
@@ -190,6 +196,7 @@ struct MpiBackend {
   void register_predicated_task(task* t){
     //don't do anything special for predicate tasks
     register_task(std::move(t));
+    clear_tasks();
   }
 
   //template <class PackFunctor, class UnpackFunctor, class TaskFunctor,
@@ -296,7 +303,6 @@ struct MpiBackend {
         packers.emplace_back(std::move(buffer));
       }
     }
-
     for (auto& pair : mpiParent->localElements()){
       int index = pair.first;
       auto elem = pair.second;
@@ -453,6 +459,7 @@ struct MpiBackend {
 
   template <class Accessor, class Index, class T>
   auto rebalance(Phase<Index>& ph, async_collection<T,Index>&& coll){
+    clear_tasks();
     int numSends = 0;
     int numRecvs = 0;
     async_ref_base<T>* dummy;
@@ -529,6 +536,7 @@ struct MpiBackend {
   template <class Phase, class GeneratorTask>
   void register_phase_collection(Phase& ph, GeneratorTask&& gen){
     clear_tasks();
+    int size = ph->local().size();
     for (auto iter=ph->index_begin(); iter != ph->index_end(); ++iter){
       auto& local = *iter;
       auto* be_task = gen.generate(static_cast<Context*>(this),local.index);

@@ -207,7 +207,11 @@ struct Frontend : public Backend {
 
     register_dependencies(be_task);
 
-    Backend::register_task(be_task);
+    if (fe_task.has_collection_args()){
+      Backend::register_control_task(be_task);
+    } else {
+      Backend::register_task(be_task);
+    }
 
     return out;
   }
@@ -230,7 +234,11 @@ struct Frontend : public Backend {
 
     register_dependencies(be_task);
 
-    Backend::register_task(be_task);
+    if (fe_task.has_collection_args()){
+      Backend::register_control_task(be_task);
+    } else {
+      Backend::register_task(be_task);
+    }
 
     return out;
   }

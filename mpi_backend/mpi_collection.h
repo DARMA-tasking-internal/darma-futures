@@ -5,6 +5,7 @@
 #include <vector>
 #include <utility>
 #include <memory>
+#include <iostream>
 #include "mpi_phase.h"
 
 template <class Idx>
@@ -118,6 +119,11 @@ struct collection : public collection_base {
   }
 
   int getRank(int index){
+    if (index >= index_mapping_.size()){
+      std::cerr << index << " is greater than mapping size " 
+        << index_mapping_.size() << std::endl;
+      abort();
+    }
     return index_mapping_[index].rank;
   }
 
