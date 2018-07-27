@@ -12,7 +12,7 @@
 #endif
 
 struct DebugFlags {
-  struct LB { };
+  struct LB {};
   struct SendRecv {};
   struct Interop {};
   struct Task {};
@@ -78,6 +78,8 @@ struct MpiBackend {
     uint64_t total;
     uint64_t max;
     uint64_t min;
+    uint64_t maxTask;
+    uint64_t minTask;
     uint64_t maxLocalTasks;
   };
 
@@ -567,7 +569,8 @@ struct MpiBackend {
     auto& coll = *collIn;
     for (auto iter=ph->index_begin(); iter != ph->index_end(); ++iter){
       auto& local = *iter;
-      Functor()(*coll.getElement(local.index), identity);
+      auto& contrib = *coll.getElement(local.index);
+      Functor()(contrib, identity);
     }
     MPI_Allreduce(MPI_IN_PLACE,
                   Functor::mpiBuffer(identity), 
@@ -717,7 +720,15 @@ struct MpiBackend {
   uint64_t tradeTasks(uint64_t desiredDelta,
                   const std::vector<pair64>& bigger,
                   const std::vector<pair64>& smaller,
-                  int& biggerIdx, int& smallerIdx);
+                  std::vector<int>& biggerIdx, 
+                  std::vector<int>& smallerIdx,
+                  int maxTrades);
+
+  uint64_t tradeTasks(uint64_t desiredDelta,
+                  uint64_t maxOverage,
+                  const std::vector<pair64>& bigger,
+                  const std::vector<pair64>& smaller,
+                  int biggerIdx, int smallerIdx);
 
   /**
    * @brief takeTasks Try to find a set of tasks to balance workload between two rans.
@@ -726,7 +737,7 @@ struct MpiBackend {
    * @param giver The list of task sizes on the rank with bigger workload
    * @return The set of tasks that best matches delta
    */
-  std::set<int> takeTasks(uint64_t desiredDelta, const std::vector<pair64>& giver);
+  std::set<int> takeTasks(uint64_t desiredDelta, const std::vector<pair64>& giver, int maxTake);
 
   /**
    * @brief balance

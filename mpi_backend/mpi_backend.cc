@@ -25,6 +25,8 @@ static void perfCtrReduceFxn(void* a, void* b, int* len, MPI_Datatype* type)
   inout->max = std::max(inout->max, in->max);
   inout->min = std::min(inout->min, in->min);
   inout->total += in->total;
+  inout->maxTask = std::max(inout->maxTask, in->maxTask);
+  inout->minTask = std::min(inout->minTask, in->minTask);
   inout->maxLocalTasks = std::max(inout->maxLocalTasks, in->maxLocalTasks);
 }
 
@@ -98,9 +100,7 @@ MpiBackend::MpiBackend(MPI_Comm comm, int argc, char** argv) :
   indices_.resize(1024);
 
 
-
-
-  int ierr = MPI_Type_vector(1, 4, 0, MPI_UINT64_T, &perfCtrType_);
+  int ierr = MPI_Type_vector(1, sizeof(PerfCtrReduce)/sizeof(uint64_t), 0, MPI_UINT64_T, &perfCtrType_);
   if (ierr != MPI_SUCCESS){
     error("Unable to create performance counter reduce type");
   }
@@ -194,6 +194,7 @@ MpiBackend::create_pending_recvs()
     MPI_Status stat;
     MPI_Probe(MPI_ANY_SOURCE, MPI_ANY_TAG, comm_, &stat);
 
+
     //this might be an incoming task - or it might just be a message
     PendingRecvBase* recv = nullptr;
     int tag = stat.MPI_TAG;
@@ -233,6 +234,7 @@ MpiBackend::create_pending_recvs()
     }
     MPI_Irecv(data, size, MPI_BYTE, stat.MPI_SOURCE, stat.MPI_TAG, comm_,
               &requests_[reqId]);
+
   }
   numPendingProbes_ = 0;
 }
@@ -242,8 +244,8 @@ MpiBackend::add_pending_recv(PendingRecvBase* pending, int collId,
                              const IndexInfo& local, const IndexInfo& remote)
 {
   int tag = makeUniqueTag(collId, local.rankUniqueId, remote.rankUniqueId);
-  darmaDebug(SendRecv, "collection {} made tag={} for receiving elem={},{} from elem={},{}",
-             collId, tag, local.rank, local.rankUniqueId, remote.rank, remote.rankUniqueId);
+  darmaDebug(SendRecv, "Rank {} collection {} made tag={} for receiving elem={},{} from elem={},{}",
+             rank_, collId, tag, local.rank, local.rankUniqueId, remote.rank, remote.rankUniqueId);
   auto iter = recvsQueued_.find(tag);
   if (iter == recvsQueued_.end()){
     pendingRecvs_[remote.rank][tag].push_back(pending);
@@ -455,8 +457,8 @@ MpiBackend::send_data(mpi_async_ref& ref, int collId,
                       void* data, int size, int taskId)
 {
   int tag = makeUniqueTag(collId, dst.rankUniqueId, src.rankUniqueId, taskId);
-  darmaDebug(SendRecv, "collection {} made tag={} for sending elem={},{} to elem={},{}",
-             collId, tag, src.rank, src.rankUniqueId, dst.rank, dst.rankUniqueId);
+  darmaDebug(SendRecv, "Rank {} collection {} made tag={} for sending elem={},{} to elem={},{}",
+             rank_, collId, tag, src.rank, src.rankUniqueId, dst.rank, dst.rankUniqueId);
   int request = allocate_request();
   ref.addRequest(request);
   send_data(dst.rank, data, size, tag, &requests_[request]);
@@ -485,7 +487,7 @@ MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int
   std::vector<int> allIndices(maxNumLocal*size_);
   std::vector<int> indices(maxNumLocal, -1);
   for (int i=0; i < local.size(); ++i){
-    //darmaDebug(LB, "Rank {} now has local index {}={}", rank_, i, local[i]);
+    darmaDebug(LB, "Rank {} now has local index {}={}", rank_, i, local[i]);
     indices[i] = local[i];
   }
 
@@ -499,10 +501,55 @@ MpiBackend::make_global_mapping_from_local(int total_size, const std::vector<int
       int globalIndex = currentBlock[localIndex];
       mapping[globalIndex].rank = i;
       mapping[globalIndex].rankUniqueId = rankCounts[i]++;
-      //darmaDebug(LB, "Rank {} thinks global index {} is now {},{}",
-      //           rank_, globalIndex, mapping[globalIndex].rank, mapping[globalIndex].rankUniqueId);
+      if (rank_ == 1){
+        darmaDebug(LB, "Rank {} thinks global index {} is now {},{}",
+                   rank_, globalIndex, mapping[globalIndex].rank, mapping[globalIndex].rankUniqueId);
+      }
     }
   }
+
+  for (int i=0; i < local.size(); ++i){
+    int globalIndex = local[i];
+    IndexInfo& ii = mapping[globalIndex];
+    darmaDebug(LB, "Rank {} thinks owned global index {} is now {},{}",
+               rank_, globalIndex, ii.rank, ii.rankUniqueId);
+  }
+
+
+  std::vector<IndexInfo> copy(mapping.size());
+  MPI_Allreduce(mapping.data(), copy.data(), copy.size()*2, MPI_INT, MPI_BAND, MPI_COMM_WORLD);
+
+  bool broken = false;
+  for (int i=0; i < copy.size(); ++i){
+    IndexInfo& ii_test = copy[i];
+    IndexInfo& ii = mapping[i];
+    if (ii.rank != ii_test.rank || ii.rankUniqueId != ii_test.rankUniqueId){
+      broken = true;
+      break;
+    }
+  }
+
+  MPI_Allreduce(mapping.data(), copy.data(), copy.size()*2, MPI_INT, MPI_BOR, MPI_COMM_WORLD);
+  for (int i=0; i < copy.size(); ++i){
+    IndexInfo& ii_test = copy[i];
+    IndexInfo& ii = mapping[i];
+    if (ii.rank != ii_test.rank || ii.rankUniqueId != ii_test.rankUniqueId){
+      broken = true;
+      break;
+    }
+  }
+
+  if (broken){
+    std::stringstream sstr;
+    for (int i=0; i < mapping.size(); ++i){
+      IndexInfo& ii = mapping[i];
+      sstr << "Rank " << rank_ << " maps " << i << " -> " 
+        << ii.rank << "," << ii.rankUniqueId << std::endl;
+    }
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+
+  darmaDebug(LB, "Rank {} cleared make mapping", rank_);
 }
 
 void
@@ -579,31 +626,57 @@ MpiBackend::rebalance(std::vector<migration>& objToSend,
     info[0] = m.size;
     info[1] = m.index;
     info[2] = m.mpiParent;
-    send_data(m.rank, info, sizeof(int)*numInfoFields, rebalance_info_tag, &sendInfoReqs[i]);
-    send_data(m.rank, m.buf, m.size, rebalance_data_tag, &sendDataReqs[i]);
+    int tag = rebalance_info_tag + m.index;
+    darmaDebug(LB, "Rank {} sending info for index {} of size {} to Rank {} on tag {}", 
+      rank_, m.index, m.size, m.rank, tag);
+    send_data(m.rank, info, sizeof(int)*numInfoFields, tag, &sendInfoReqs[i]);
   }
 
   for (int i=0; i < numRecvs; ++i){
-    migration& m = objToRecv[i];
     int* info = &recvInfos[numInfoFields*i];
-    recv_data(m.rank, info, sizeof(int)*numInfoFields, rebalance_info_tag, &recvInfoReqs[i]);
+    migration& m = objToRecv[i];
+    int tag = rebalance_info_tag + m.index;
+    darmaDebug(LB, "Rank {} requesting to receive index {} from Rank {} on tag {}",
+               rank_, m.index, m.rank, tag);
+    recv_data(m.rank, info, sizeof(int)*numInfoFields, tag, &recvInfoReqs[i]);
   }
 
-  MPI_Waitall(numSends, sendInfoReqs.data(), MPI_STATUSES_IGNORE);
-  MPI_Waitall(numRecvs, recvInfoReqs.data(), MPI_STATUSES_IGNORE);
+  MPI_Waitall(numSends, &sendInfoReqs[0], MPI_STATUSES_IGNORE);
+  darmaDebug(LB, "Rank {} cleared info sends - now to wait on {} recv requests", rank_, numRecvs);
+  for (int i=0; i < numRecvs; ++i){
+    MPI_Wait(&recvInfoReqs[i], MPI_STATUS_IGNORE);
+    darmaDebug(LB, "Rank {} cleared info recv {}", rank_, i);
+  }
+  //MPI_Waitall(numRecvs, &recvInfoReqs[0], MPI_STATUSES_IGNORE);
+  darmaDebug(LB, "Rank {} cleared info recvs", rank_);
+
+  for (int i=0; i < numSends; ++i){
+    const migration& m = objToSend[i];
+    int* info = &sendInfos[numInfoFields*i];
+    int tag = rebalance_data_tag + m.index;
+    darmaDebug(LB, "Rank {} sending data {} for index {} of size {} to Rank {} on tag {}", 
+      rank_, m.buf, m.index, m.size, m.rank, tag);
+    send_data(m.rank, m.buf, m.size, tag, &sendDataReqs[i]);
+  }
 
   for (int i=0; i < numRecvs; ++i){
     int* info = &recvInfos[numInfoFields*i];
     migration& m = objToRecv[i];
     m.size = info[0];
-    m.index = info[1];
+    if (m.index != info[1]){
+      error("Mismatched rebalance send/recv for index %d", m.index);
+    }
     m.mpiParent = info[2];
     m.buf = allocate_temp_buffer(m.size);
-    recv_data(m.rank, m.buf, m.size, rebalance_data_tag, &recvDataReqs[i]);
+    int tag = rebalance_data_tag + m.index;
+    darmaDebug(LB, "Rank {} ready to receive index {} from Rank {} on tag {} into buf {} for obj {}",
+               rank_, m.index, m.rank, tag, m.buf, m.obj);
+    recv_data(m.rank, m.buf, m.size, tag, &recvDataReqs[i]);
   }
 
   MPI_Waitall(numRecvs, recvDataReqs.data(), MPI_STATUSES_IGNORE);
   MPI_Waitall(numSends, sendDataReqs.data(), MPI_STATUSES_IGNORE);
+  darmaDebug(LB, "Rank {} cleared rebalance", rank_);
 }
 
 void
