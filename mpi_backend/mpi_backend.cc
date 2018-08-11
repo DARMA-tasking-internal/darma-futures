@@ -145,11 +145,16 @@ int
 MpiBackend::makeUniqueTag(int collId, int dstId, int srcId, int taskId){
   //this is dirty - but don't hate
   int tag = 0;
+  int maxId = (1<<7) - 1;
+  if (dstId > maxId || srcId >= maxId){
+    error("Local IDs %d->%d larger than max %d - must reduce overdecomposition", 
+      dstId, srcId, maxId);
+  }
   tag = tag | uint32_t(collId) << 16;
   tag = tag | uint32_t(dstId) << 10;
   tag = tag | uint32_t(srcId) << 4;
   tag = tag | uint32_t(taskId);
-  int maxTag = 1<<21 - 1;
+  int maxTag = (1<<21) - 1;
   if (tag > maxTag){
     error("Invalid tag %d from %d-%d-%d-%d", tag, collId, dstId, srcId, taskId);
   }
@@ -468,6 +473,9 @@ MpiBackend::send_data(mpi_async_ref& ref, int collId,
 void
 MpiBackend::send_data(int dest, void *data, int size, int tag, MPI_Request *req)
 {
+  if (dest >= size_ || dest < 0){
+    error("Trying to send to invalid rank %d", dest);
+  }
   MPI_Isend(data, size, MPI_BYTE, dest, tag, comm_, req);
 }
 
