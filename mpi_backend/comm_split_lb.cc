@@ -80,8 +80,7 @@ MpiBackend::commSplitBalance(std::vector<pair64>&& localConfig)
       return oldConfig;
     }
 
-    allowGiveTake = allowGiveTake || tryNum >= 2;
-    allowGiveTake = false; //
+    allowGiveTake = allowGiveTake || tryNum >= 4;
     //sort the old config by task weight
     for (auto& pair : oldConfig){
       if (pair.first == 0) error("Rank %d has zero weight before sort", rank_);
@@ -158,7 +157,7 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
 {
   uint64_t perfBalance = globalWork / size_;
 
-  int maxGive = maxNumLocalTasks / 4;
+  allowGiveTake = false;
 
   MPI_Comm balanceComm;
   int color = 0;
@@ -229,6 +228,8 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
     return;
   }
 
+
+  int maxTake, maxGive;
   if (localWork < partnerTotalWork){
     // a bit tricky - the change in task sizes should be 1/2 the difference
     //uint64_t desiredDelta = (perfBalance - localWork);
@@ -312,12 +313,13 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
   for (auto& pair : localConfig) localWork += pair.first;
   std::sort(localConfig.begin(), localConfig.end(), sortByWeight());
 
-  if (exchangeFailed){ //&& allowGiveTake
+  if (exchangeFailed && allowGiveTake){
     if (localWork < partnerTotalWork){
+      maxTake = maxGive = (numPartnerTasks - numLocalTasks) / 2 + 2;
       uint64_t desiredDelta = (partnerTotalWork - localWork) / 2;
       //uint64_t desiredDelta = (perfBalance - localWork);
       //I have less work and also fewer tasks, take some tasks
-      std::set<int> toTake = takeTasks(desiredDelta, incomingConfig, maxGive);
+      std::set<int> toTake = takeTasks(desiredDelta, incomingConfig, maxTake);
       uint64_t totalDelta = 0;
       darmaDebug(LB, "Rank {}={} took {} tasks from partner", 
                  rank_, balanceRank, toTake.size());
@@ -330,6 +332,7 @@ MpiBackend::runCommSplitBalancer(std::vector<pair64>&& localConfig,
         localConfig.push_back(bigTaskPair);
       }
     } else if (localWork > partnerTotalWork){
+      maxTake = maxGive = (numLocalTasks - numPartnerTasks) / 2 + 2;
       uint64_t desiredDelta = (localWork - partnerTotalWork) / 2;
       //uint64_t desiredDelta = (perfBalance - partnerTotalWork);
       //I have more work and also more tasks - give some tasks away
