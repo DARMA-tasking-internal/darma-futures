@@ -11,6 +11,8 @@
 #define darmaDebug(...)
 #endif
 
+#include <sys/time.h>
+
 struct DebugFlags {
   struct LB {};
   struct SendRecv {};
@@ -115,6 +117,11 @@ struct MpiBackend {
     return ret;
   }
 
+  double get_time() const {
+    timeval t; gettimeofday(&t, nullptr);
+    return t.tv_sec + 1e-6*t.tv_usec;
+  }
+
   template <class T, class Idx>
   auto make_phase(mpi_collection_ptr<T,Idx>& coll){
     Phase<Idx> ret(coll->size());
@@ -163,6 +170,7 @@ struct MpiBackend {
   template <class Idx>
   void rebalance(Phase<Idx>& ph){
     clear_tasks();
+    MPI_Barrier(comm_); //bad to do, but for the timers
     std::vector<pair64> newConfig = balance(ph->local());
     reset_phase(newConfig, ph->local_, ph->index_to_rank_mapping_);
   }
@@ -462,6 +470,7 @@ struct MpiBackend {
   template <class Accessor, class Index, class T>
   auto rebalance(Phase<Index>& ph, async_collection<T,Index>&& coll){
     clear_tasks();
+    double t_start = get_time();
     int numSends = 0;
     int numRecvs = 0;
     async_ref_base<T>* dummy;
@@ -515,6 +524,13 @@ struct MpiBackend {
     }
 
     coll->index_mapping_ = ph->index_to_rank_mapping_;
+
+    double t_stop = get_time();
+    double t_ms = (t_stop - t_start)*1e3;
+    if (rank_ == 0){
+      std::cout << "Load balance data migration took " << t_ms << "ms" << std::endl;
+    }
+
 
     async_collection<T,Index> ret(std::move(coll));
     return ret;

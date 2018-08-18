@@ -10,6 +10,16 @@ MpiBackend::commSplitBalance(std::vector<pair64>&& localConfig)
   int tryNum = 0;
   double maxDiffFraction;
 
+  double t_start = get_time();
+  MPI_Barrier(comm_); //bad, but for timers
+  double t_stop = get_time();
+  double t_ms = (t_stop - t_start)*1e3;
+  if (rank_ == 0){
+    std::cout << "Load balance synchronization delay took " << t_ms << "ms" << std::endl;
+  }
+
+  t_start = get_time();
+
   std::vector<pair64> oldConfig = std::move(localConfig);
 
   uint64_t lastImbalance = std::numeric_limits<uint64_t>::max();
@@ -18,7 +28,7 @@ MpiBackend::commSplitBalance(std::vector<pair64>&& localConfig)
   bool allowGiveTake = false;
   while(1) {
     if (tryNum >= maxNumTries){
-      return oldConfig;
+      break;
     }
 
     uint64_t localWork = 0;
@@ -65,13 +75,13 @@ MpiBackend::commSplitBalance(std::vector<pair64>&& localConfig)
     uint64_t newImbalance = global.max - perfBalance;
     double improvement = double(lastImbalance) / double(newImbalance);
     if (improvement < 1.05){
-      return oldConfig;
+      break;
     }
     lastImbalance = newImbalance;
 
     double imbalanceRatio = double(global.max) / double(perfBalance);
     if (imbalanceRatio < 1.1){
-      return oldConfig;
+      break;
     }
 
     uint64_t maxDiff = global.max - global.min;
@@ -111,6 +121,12 @@ MpiBackend::commSplitBalance(std::vector<pair64>&& localConfig)
     ++tryNum;
 
     oldConfig = std::move(newConfig);
+  }
+
+  if (rank_ == 0){
+    double t_stop = get_time();
+    double t_ms = (t_stop - t_start)*1e3;
+    std::cout << "Load balance compute took " << t_ms << "ms" << std::endl;
   }
   return oldConfig; //not really needed, but make compilers happy
 }
