@@ -559,26 +559,33 @@ struct MpiBackend {
     //taskQueue_.push_back(terminate_task);
   }
 
-  template <class Functor, class Phase, class T, class Idx>
-  auto register_phase_reduce(Phase& ph, async_ref_base<collection<T,Idx>>&& collIn,
-                                        async_ref_base<collection<T,Idx>>& collOut)
+  template <class Functor, class T, class Idx>
+  auto register_local_reduce(async_ref_base<collection<T,Idx>>&& collIn,
+                             async_ref_base<collection<T,Idx>>& collOut)
+  {
+    auto& coll = *collIn;
+    auto identity = Functor::identity();
+    for (auto iter=coll.localElements().begin(); iter != coll.localElements().end(); ++iter){
+      auto& contrib = iter->second;
+      Functor()(*contrib, identity);
+    }
+    return async_ref_base<decltype(identity)>(in_place_construct, std::move(identity));
+  }
+
+  template <class Functor, class T, class Idx>
+  auto register_reduce(async_ref_base<collection<T,Idx>>&& collIn,
+                       async_ref_base<collection<T,Idx>>& collOut)
   {
     clear_tasks();
-    auto identity = Functor::identity();
-    //ensure that all of these tasks 
-    auto& coll = *collIn;
-    for (auto iter=ph->index_begin(); iter != ph->index_end(); ++iter){
-      auto& local = *iter;
-      auto& contrib = *coll.getElement(local.index);
-      Functor()(contrib, identity);
-    }
+
+    auto localResult = register_local_reduce<Functor>(std::move(collIn), collOut);
     MPI_Allreduce(MPI_IN_PLACE,
-                  Functor::mpiBuffer(identity), 
-                  Functor::mpiSize(identity), 
-                  Functor::mpiType(identity),
-                  Functor::mpiOp(identity),
+                  Functor::mpiBuffer(*localResult),
+                  Functor::mpiSize(*localResult),
+                  Functor::mpiType(*localResult),
+                  Functor::mpiOp(*localResult),
                   comm_);
-    return async_ref_base<T>(in_place_construct, std::move(identity));
+    return localResult;
   }
   
   template <class Phase, class T, class Idx>

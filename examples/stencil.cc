@@ -174,7 +174,7 @@ int main(int argc, char** argv)
       std::tie(coll,residuals) = dc->create_phase_work<DarmaPatch::Timestep>(phase,i,
                                                   std::move(coll),std::move(residuals));
       auto residual = dc->make_async_ref<double>();
-      std::tie(residual,residuals) = dc->phase_reduce<Add<double>>(phase, std::move(residuals));
+      std::tie(residual,residuals) = dc->reduce<Add<double>>(std::move(residuals));
       std::tie(residual) = dc->create_work<DarmaPatch::Print>(i,std::move(residual));
       if (i % 5 == 0) dc->rebalance(phase);
     }

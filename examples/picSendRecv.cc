@@ -176,7 +176,7 @@ struct CollectiveMove {
               ph,microIter,std::move(swarm),std::move(nmoved));
 
     auto total_ret = ctx->make_async_ref<int>();
-    std::tie(total_ret, nmoved_ret) = ctx->phase_reduce<Add<int>>(ph, std::move(nmoved_ret));
+    std::tie(total_ret, nmoved_ret) = ctx->reduce<Add<int>>(std::move(nmoved_ret));
 
     std::tie(total_ret) = ctx->create_work_inline([](Context* ctx, auto total){
       std::cout << "Moved a total of " << *total << std::endl;

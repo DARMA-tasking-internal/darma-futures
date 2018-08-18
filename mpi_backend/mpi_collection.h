@@ -63,6 +63,14 @@ struct mpi_collection {
     return local_elements_;
   }
 
+  const auto begin() const {
+    return local_elements_.begin();
+  }
+
+  const auto end() const {
+    return local_elements_.end();
+  }
+
   T& getLocal(const Idx& idx){
     auto iter = local_elements_.find(idx);
     if (iter == local_elements_.end()){

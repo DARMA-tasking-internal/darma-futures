@@ -126,14 +126,25 @@ struct Frontend : public Backend {
     return std::make_tuple(std::move(pred_task), std::move(ret));
   }
 
-  template <class Functor, class Phase,  class T, class Idx>
-  auto phase_reduce(Phase& ph, async_ref<collection<T,Idx>,None,Modify>&& coll){
+  template <class Functor, class T, class Idx>
+  auto local_reduce(async_ref<collection<T,Idx>,None,Modify>&& coll){
     async_ref<collection<T,Idx>,None,Modify> coll_ret(std::move(coll));
 
     //Backend::sequence(Collective, coll, coll_ret);
 
     //some sort of registration
-    auto red_ret = Backend::template register_phase_reduce<Functor>(ph, std::move(coll), coll_ret);
+    auto red_ret = Backend::template register_local_reduce<Functor>(std::move(coll), coll_ret);
+    return std::make_tuple(std::move(red_ret), std::move(coll_ret));
+  }
+
+  template <class Functor, class T, class Idx>
+  auto reduce(async_ref<collection<T,Idx>,None,Modify>&& coll){
+    async_ref<collection<T,Idx>,None,Modify> coll_ret(std::move(coll));
+
+    //Backend::sequence(Collective, coll, coll_ret);
+
+    //some sort of registration
+    auto red_ret = Backend::template register_reduce<Functor>(std::move(coll), coll_ret);
     return std::make_tuple(std::move(red_ret), std::move(coll_ret));
   }
   
